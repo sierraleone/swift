@@ -751,10 +751,10 @@ static void markInvalidGenericSignature(ValueDecl *VD,
   // Visit each of the generic parameters.
   for (auto param : *genericParams)
     builder.addGenericParameter(param);
-  
+
   // Wire up the archetypes.
   for (auto GP : *genericParams)
-    GP->setArchetype(builder.getArchetype(GP));
+    builder.configureGenericParameter(GP);
 
   genericParams->setAllArchetypes(
       TC.Context.AllocateCopy(builder.getAllArchetypes()));
@@ -777,7 +777,7 @@ static void finalizeGenericParamList(ArchetypeBuilder &builder,
 
   // Wire up the archetypes.
   for (auto GP : *genericParams) {
-    GP->setArchetype(builder.getArchetype(GP));
+    builder.configureGenericParameter(GP);
     TC.checkInheritanceClause(GP);
     if (!GP->hasAccessibility())
       GP->setAccessibility(access);

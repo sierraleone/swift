@@ -45,9 +45,9 @@ GenericSignature::getInnermostGenericParams() const {
   auto params = getGenericParams();
 
   // Find the point at which the depth changes.
-  unsigned depth = params.back()->getDepth();
+  unsigned depth = params.back()->getDeclaredDepth();
   for (unsigned n = params.size(); n > 0; --n) {
-    if (params[n-1]->getDepth() != depth) {
+    if (params[n-1]->getDeclaredDepth() != depth) {
       return params.slice(n);
     }
   }
@@ -147,10 +147,10 @@ static int compareDependentTypes(const CanType *pa, const CanType *pb) {
   if (auto gpa = dyn_cast<GenericTypeParamType>(a)) {
     if (auto gpb = dyn_cast<GenericTypeParamType>(b)) {
       // - by depth, so t_0_n < t_1_m
-      if (int compareDepth = gpa->getDepth() - gpb->getDepth())
+      if (int compareDepth = gpa->getDeclaredDepth() - gpb->getDeclaredDepth())
         return compareDepth;
       // - by index, so t_n_0 < t_n_1
-      return gpa->getIndex() - gpb->getIndex();
+      return gpa->getDeclaredIndex() - gpb->getDeclaredIndex();
     }
     return -1;
   }
@@ -215,7 +215,7 @@ GenericSignature::getCanonicalManglingSignature(ModuleDecl &M) const {
     CanType baseClass;
     SmallVector<CanType, 2> protocols;
   };
-  
+
   SmallVector<CanType, 2> depTypes;
   llvm::DenseMap<CanType, DependentConstraints> constraints;
   llvm::DenseMap<CanType, SmallVector<CanType, 2>> sameTypes;

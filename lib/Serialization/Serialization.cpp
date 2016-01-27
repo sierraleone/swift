@@ -2184,6 +2184,7 @@ void Serializer::writeDecl(const Decl *D) {
                                 addIdentifierRef(genericParam->getName()),
                                 contextID,
                                 genericParam->isImplicit(),
+                                genericParam->declaresPrimaryArchetype(),
                                 genericParam->getDepth(),
                                 genericParam->getIndex(),
                                 addTypeRef(genericParam->getArchetype()),

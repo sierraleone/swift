@@ -2139,6 +2139,7 @@ Decl *ModuleFile::getDecl(DeclID DID, Optional<DeclContext *> ForcedContext) {
     IdentifierID nameID;
     DeclContextID contextID;
     bool isImplicit;
+    bool isPrimary;
     unsigned depth;
     unsigned index;
     TypeID archetypeID;
@@ -2147,6 +2148,7 @@ Decl *ModuleFile::getDecl(DeclID DID, Optional<DeclContext *> ForcedContext) {
     decls_block::GenericTypeParamDeclLayout::readRecord(scratch, nameID,
                                                         contextID,
                                                         isImplicit,
+                                                        isPrimary,
                                                         depth,
                                                         index,
                                                         archetypeID,
@@ -2167,7 +2169,8 @@ Decl *ModuleFile::getDecl(DeclID DID, Optional<DeclContext *> ForcedContext) {
     if (isImplicit)
       genericParam->setImplicit();
 
-    genericParam->setArchetype(getType(archetypeID)->castTo<ArchetypeType>());
+    genericParam->setArchetype(getType(archetypeID)->castTo<ArchetypeType>(),
+                               isPrimary);
 
     auto inherited = ctx.Allocate<TypeLoc>(rawInheritedIDs.size());
     for_each(inherited, rawInheritedIDs, [this](TypeLoc &loc, uint64_t rawID) {

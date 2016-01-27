@@ -304,8 +304,7 @@ struct ASTContext::Implementation {
   };
 
   llvm::DenseMap<Module*, ModuleType*> ModuleTypes;
-  llvm::DenseMap<std::pair<unsigned, unsigned>, GenericTypeParamType *>
-    GenericParamTypes;
+  llvm::SmallVector<GenericTypeParamType *, 8> GenericParamTypes;
   llvm::FoldingSet<GenericFunctionType> GenericFunctionTypes;
   llvm::FoldingSet<SILFunctionType> SILFunctionTypes;
   llvm::DenseMap<CanType, SILBlockStorageType *> SILBlockStorageTypes;
@@ -2960,15 +2959,23 @@ GenericFunctionType::GenericFunctionType(
     Signature(sig)
 {}
 
-GenericTypeParamType *GenericTypeParamType::get(unsigned depth, unsigned index,
+GenericTypeParamType *GenericTypeParamType::get(unsigned index,
                                                 const ASTContext &ctx) {
-  auto known = ctx.Impl.GenericParamTypes.find({ depth, index });
-  if (known != ctx.Impl.GenericParamTypes.end())
-    return known->second;
+  // We can use a vector instead of a map here because indexes
+  // should always be dense.
+  auto &knownTypes = ctx.Impl.GenericParamTypes;
+  if (index < knownTypes.size()) {
+    if (knownTypes[index])
+      return knownTypes[index];
+
+  // Otherwise, resize the array.
+  } else {
+    knownTypes.resize(index + 1, nullptr);
+  }
 
   auto result = new (ctx, AllocationArena::Permanent)
-                  GenericTypeParamType(depth, index, ctx);
-  ctx.Impl.GenericParamTypes[{depth, index}] = result;
+                  GenericTypeParamType(index, ctx);
+  knownTypes[index] = result;
   return result;
 }
 

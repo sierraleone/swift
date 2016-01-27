@@ -52,7 +52,7 @@ const uint16_t VERSION_MAJOR = 0;
 /// in source control, you should also update the comment to briefly
 /// describe what change you made. The content of this comment isn't important;
 /// it just ensures a conflict if two people change the module format.
-const uint16_t VERSION_MINOR = 238; // SILValue changes
+const uint16_t VERSION_MINOR = 239; // GenericTypeParamDecl isPrimary
 
 using DeclID = Fixnum<31>;
 using DeclIDField = BCFixed<31>;
@@ -763,6 +763,7 @@ namespace decls_block {
     IdentifierIDField, // name
     DeclContextIDField,// context decl
     BCFixed<1>,  // implicit flag
+    BCFixed<1>,  // isPrimary flag
     BCVBR<4>,    // depth
     BCVBR<4>,    // index
     TypeIDField, // archetype type

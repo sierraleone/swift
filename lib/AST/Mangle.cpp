@@ -583,7 +583,7 @@ static bool isMethodDecl(const Decl *decl) {
 
 static bool genericParamIsBelowDepth(Type type, unsigned methodDepth) {
   if (auto gp = type->getAs<GenericTypeParamType>()) {
-    return gp->getDepth() >= methodDepth;
+    return gp->getDeclaredDepth() >= methodDepth;
   }
   if (auto dm = type->getAs<DependentMemberType>()) {
     return genericParamIsBelowDepth(dm->getBase(), methodDepth);
@@ -631,10 +631,10 @@ Type Mangler::getDeclTypeForMangling(const ValueDecl *decl,
       // The method's depth starts below the depth of the context.
       if (!parentGenericSig->getGenericParams().empty())
         initialParamDepth =
-          parentGenericSig->getGenericParams().back()->getDepth()+1;
+          parentGenericSig->getGenericParams().back()->getDeclaredDepth()+1;
 
       while (!genericParams.empty()) {
-        if (genericParams.front()->getDepth() >= initialParamDepth)
+        if (genericParams.front()->getDeclaredDepth() >= initialParamDepth)
           break;
         genericParams = genericParams.slice(1);
       }
@@ -739,13 +739,13 @@ void Mangler::mangleGenericSignatureParts(
   
   // As a special case, mangle nothing if there's a single generic parameter
   // at the initial depth.
-  if (params.size() == 1 && params[0]->getDepth() == initialParamDepth)
+  if (params.size() == 1 && params[0]->getDeclaredDepth() == initialParamDepth)
     goto mangle_requirements;
   
   for (auto param : params) {
-    if (param->getDepth() != depth) {
-      assert(param->getDepth() > depth && "generic params not ordered");
-      while (depth < param->getDepth()) {
+    if (param->getDeclaredDepth() != depth) {
+      assert(param->getDeclaredDepth() > depth && "generic params not ordered");
+      while (depth < param->getDeclaredDepth()) {
         mangleGenericParamCount(depth, count);
         ++depth;
         count = 0;

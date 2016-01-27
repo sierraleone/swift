@@ -143,7 +143,14 @@ struct GenericTypeParamKey {
   }
   
   static GenericTypeParamKey forType(GenericTypeParamType *t) {
-    return {t->getDepth(), t->getIndex()};
+    if (auto d = t->getDecl())
+      return forDecl(d);
+    return {0, t->getDeclaredIndex()};
+  }
+
+  bool operator<(const GenericTypeParamKey &other) const {
+    return (Depth < other.Depth)
+        || (Depth == other.Depth && Index < other.Index);
   }
 };
 }
@@ -340,11 +347,9 @@ bool ArchetypeBuilder::PotentialArchetype::isBetterArchetypeAnchor(
     return otherConcrete;
 
   // FIXME: Not a total order.
-  return std::make_tuple(getRootParam()->getDepth(),
-                         getRootParam()->getIndex(),
+  return std::make_tuple(GenericTypeParamKey::forType(getRootParam()),
                          getNestingDepth())
-    < std::make_tuple(other->getRootParam()->getDepth(),
-                      other->getRootParam()->getIndex(),
+    < std::make_tuple(GenericTypeParamKey::forType(other->getRootParam()),
                       other->getNestingDepth());
 }
 
@@ -715,7 +720,7 @@ auto ArchetypeBuilder::addGenericParameter(GenericTypeParamType *GenericParam,
                                            Identifier ParamName)
        -> PotentialArchetype *
 {
-  GenericTypeParamKey Key{GenericParam->getDepth(), GenericParam->getIndex()};
+  GenericTypeParamKey Key = GenericTypeParamKey::forType(GenericParam);
   
   // Create a potential archetype for this type parameter.
   assert(!Impl->PotentialArchetypes[Key]);
@@ -741,7 +746,7 @@ bool ArchetypeBuilder::addGenericParameter(GenericTypeParamDecl *GenericParam) {
 }
 
 bool ArchetypeBuilder::addGenericParameterRequirements(GenericTypeParamDecl *GenericParam) {
-  GenericTypeParamKey Key{GenericParam->getDepth(), GenericParam->getIndex()};
+  GenericTypeParamKey Key = GenericTypeParamKey::forDecl(GenericParam);
   auto PA = Impl->PotentialArchetypes[Key];
   
   // Add the requirements from the declaration.
@@ -871,10 +876,10 @@ bool ArchetypeBuilder::addSameTypeRequirementBetweenArchetypes(
   auto T2Param = T2->getRootParam();
   unsigned T1Depth = T1->getNestingDepth();
   unsigned T2Depth = T2->getNestingDepth();
-  if (std::make_tuple(T2->wasRenamed(), T2Param->getDepth(),
-                      T2Param->getIndex(), T2Depth)
-        < std::make_tuple(T1->wasRenamed(), T1Param->getDepth(),
-                          T1Param->getIndex(), T1Depth))
+  if (std::make_tuple(T2->wasRenamed(), GenericTypeParamKey::forType(T2Param),
+                      T2Depth)
+      < std::make_tuple(T1->wasRenamed(), GenericTypeParamKey::forType(T1Param),
+                        T1Depth))
     std::swap(T1, T2);
 
   // Don't allow two generic parameters to be equivalent, because then we
@@ -938,6 +943,22 @@ bool ArchetypeBuilder::addSameTypeRequirementBetweenArchetypes(
   }
 
   return false;
+}
+
+void ArchetypeBuilder::PotentialArchetype::switchRepresentative(
+                                                  PotentialArchetype *other) {
+  assert(this != other && "can't switch representatives to self");
+  Representative = other;
+  other->Representative = other;
+  SameTypeSource = other->SameTypeSource;
+  other->ArchetypeOrConcreteType = ArchetypeOrConcreteType;
+  other->Superclass = Superclass;
+  other->SuperclassSource = SuperclassSource;
+  other->ConformsTo = std::move(ConformsTo);
+  other->NestedTypes = std::move(NestedTypes);
+  other->EquivalenceClass = std::move(EquivalenceClass);
+  // No need to change the representative for the entire equivalence class;
+  // it'll get set automatically on query.
 }
 
 bool ArchetypeBuilder::addSameTypeRequirementToConcrete(
@@ -1255,21 +1276,11 @@ class ArchetypeBuilder::InferRequirementsWalker : public TypeWalker {
   ArchetypeBuilder &Builder;
   SourceLoc Loc;
   bool HadError = false;
-  unsigned Depth;
-
-  /// We cannot add requirements to archetypes from outer generic parameter
-  /// lists.
-  bool isOuterArchetype(PotentialArchetype *PA) {
-    unsigned ParamDepth = PA->getRootParam()->getDepth();
-    assert(ParamDepth <= Depth);
-    return ParamDepth < Depth;
-  }
 
 public:
   InferRequirementsWalker(ArchetypeBuilder &builder,
-                          SourceLoc loc,
-                          unsigned Depth)
-    : Builder(builder), Loc(loc), Depth(Depth) { }
+                          SourceLoc loc)
+    : Builder(builder), Loc(loc) { }
 
   bool hadError() const { return HadError; }
 
@@ -1307,11 +1318,7 @@ public:
                            SubstFlags::IgnoreMissing);
         if (!firstType)
           break;
-
         auto firstPA = Builder.resolveArchetype(firstType);
-
-        if (firstPA && isOuterArchetype(firstPA))
-          return Action::Continue;
 
         auto secondType = req.getSecondType().subst(
                             &Builder.getModule(), 
@@ -1352,9 +1359,6 @@ public:
           break;
         }
 
-        if (isOuterArchetype(subjectPA))
-          return Action::Continue;
-
         if (req.getKind() == RequirementKind::Conformance) {
           auto proto = req.getSecondType()->castTo<ProtocolType>();
           if (Builder.addConformanceRequirement(subjectPA, proto->getDecl(),
@@ -1385,8 +1389,7 @@ bool ArchetypeBuilder::inferRequirements(TypeLoc type,
   if (genericParams == nullptr)
     return false;
   // FIXME: Crummy source-location information.
-  InferRequirementsWalker walker(*this, type.getSourceRange().Start,
-                                 genericParams->getDepth());
+  InferRequirementsWalker walker(*this, type.getSourceRange().Start);
   type.getType().walk(walker);
   return walker.hadError();
 }
@@ -1483,6 +1486,38 @@ bool ArchetypeBuilder::finalize(SourceLoc loc) {
     });
   }
 
+  // Try to eliminate primary archetypes that have been made equivalent to
+  // other types.
+  if (!invalid) {
+    // Walk the top-level potential archetypes in reverse.
+    for (const auto &entry : reversed(Impl->PotentialArchetypes)) {
+      PotentialArchetype *pa = entry.second;
+
+      // Ignore archetypes with parents.
+      if (pa->getParent()) continue;
+
+      // Ignore archetypes that aren't representative.
+      if (!pa->isRepresentative()) continue;
+
+      // Ignore archetypes which haven't been unified with anything.
+      auto equivalenceClass = pa->getEquivalenceClass();
+      if (equivalenceClass.size() == 1) continue;
+
+      // Look through the equivalence class.
+      for (auto equivalentPA : equivalenceClass) {
+        if (equivalentPA == pa) continue;
+
+        // If we find a PA that's rooted in an archetype that's
+        // still representative, set it as the representative.
+        auto equivalentRoot = equivalentPA->getRoot();
+        if (equivalentRoot != pa && equivalentRoot->isRepresentative()) {
+          pa->switchRepresentative(equivalentPA);
+          break;
+        }
+      }
+    }
+  }
+
   return invalid;
 }
 
@@ -1494,6 +1529,17 @@ ArchetypeBuilder::getArchetype(GenericTypeParamDecl *GenericParam) {
     return nullptr;
 
   return known->second->getType(*this).getAsArchetype();
+}
+
+void ArchetypeBuilder::configureGenericParameter(GenericTypeParamDecl *GP) {
+  auto known = Impl->PotentialArchetypes.find(GenericTypeParamKey::forDecl(GP));
+
+  // This should only happen in invalid code.
+  if (known == Impl->PotentialArchetypes.end())
+    return;
+
+  PotentialArchetype *PA = known->second;
+  GP->setArchetype(PA->getType(*this).getAsArchetype(), PA->isRepresentative());
 }
 
 ArrayRef<ArchetypeType *> ArchetypeBuilder::getAllArchetypes() {
@@ -1508,6 +1554,7 @@ ArrayRef<ArchetypeType *> ArchetypeBuilder::getAllArchetypes() {
         continue;
 
       PotentialArchetype *PA = Entry.second;
+      if (!PA->isRepresentative()) continue;
       auto Archetype = PA->getType(*this).castToArchetype();
       if (KnownArchetypes.insert(Archetype).second)
         Impl->AllArchetypes.push_back(Archetype);
@@ -1520,7 +1567,7 @@ ArrayRef<ArchetypeType *> ArchetypeBuilder::getAllArchetypes() {
         continue;
 
       PotentialArchetype *PA = Entry.second;
-      if (!PA->isConcreteType()) {
+      if (PA->isRepresentative() && !PA->isConcreteType()) {
         auto Archetype = PA->getType(*this).castToArchetype();
         GenericParamList::addNestedArchetypes(Archetype, KnownArchetypes,
                                               Impl->AllArchetypes);
@@ -1606,7 +1653,7 @@ void ArchetypeBuilder::enumerateRequirements(llvm::function_ref<
 
     // If this is not the representative, produce a same-type
     // constraint to the representative.
-    if (archetype->getRepresentative() != archetype) {
+    if (!archetype->isRepresentative()) {
       if (!archetype->wasRenamed())
         f(RequirementKind::SameType, archetype, archetype->getRepresentative(),
           archetype->getSameTypeSource());
@@ -1763,33 +1810,10 @@ Type ArchetypeBuilder::mapTypeIntoContext(Module *M,
   if (!genericParams || !type->hasTypeParameter())
     return type;
 
-  unsigned genericParamsDepth = genericParams->getDepth();
   return type.transform([&](Type type) -> Type {
     // Map a generic parameter type to its archetype.
     if (auto gpType = type->getAs<GenericTypeParamType>()) {
-      auto index = gpType->getIndex();
-      unsigned depth = gpType->getDepth();
-
-      // Skip down to the generic parameter list that houses the corresponding
-      // generic parameter.
-      auto myGenericParams = genericParams;
-      assert(genericParamsDepth >= depth);
-      unsigned skipLevels = genericParamsDepth - depth;
-      while (skipLevels > 0) {
-        myGenericParams = myGenericParams->getOuterParameters();
-        assert(myGenericParams && "Wrong number of levels?");
-        --skipLevels;
-      }
-
-      // Return the archetype.
-      // FIXME: Use the allArchetypes vector instead of the generic param if
-      // available because of cross-module archetype serialization woes.
-      if (!myGenericParams->getAllArchetypes().empty())
-        return myGenericParams->getPrimaryArchetypes()[index];
-
-      // During type-checking, we may try to mapTypeInContext before
-      // AllArchetypes has been built, so fall back to the generic params.
-      return myGenericParams->getParams()[index]->getArchetype();
+      return genericParams->resolveInContext(gpType);
     }
 
     // Map a dependent member to the corresponding nested archetype.
@@ -1930,19 +1954,20 @@ addNestedRequirements(
 /// their associated types.
 static void collectRequirements(ArchetypeBuilder &builder,
                                 ArrayRef<GenericTypeParamType *> params,
+                           SmallVectorImpl<GenericTypeParamType *> &primary,
                                 SmallVectorImpl<Requirement> &requirements) {
   typedef ArchetypeBuilder::PotentialArchetype PotentialArchetype;
 
   // Find the "primary" potential archetypes, from which we'll collect all
   // of the requirements.
   llvm::SmallPtrSet<PotentialArchetype *, 16> knownPAs;
-  llvm::SmallVector<GenericTypeParamType *, 8> primary;
   for (auto param : params) {
     auto pa = builder.resolveArchetype(param);
     assert(pa && "Missing potential archetype for generic parameter");
 
-    // We only care about the representative.
-    pa = pa->getRepresentative();
+    // If the type is not its own representative, it is not primary.
+    if (!pa->isRepresentative())
+      continue;
 
     if (knownPAs.insert(pa).second)
       primary.push_back(param);
@@ -1952,7 +1977,7 @@ static void collectRequirements(ArchetypeBuilder &builder,
   // generic parameters and their associated types.
   unsigned primaryIdx = 0, numPrimary = primary.size();
   while (primaryIdx < numPrimary) {
-    unsigned depth = primary[primaryIdx]->getDepth();
+    unsigned depth = primary[primaryIdx]->getDeclaredDepth();
 
     // For each of the primary potential archetypes, add the requirements.
     // Stop when we hit a parameter at a different depth.
@@ -1961,7 +1986,7 @@ static void collectRequirements(ArchetypeBuilder &builder,
     // "the truth", we can simplify this algorithm considerably.
     unsigned lastPrimaryIdx = primaryIdx;
     for (unsigned idx = primaryIdx;
-         idx < numPrimary && primary[idx]->getDepth() == depth;
+         idx < numPrimary && primary[idx]->getDeclaredDepth() == depth;
          ++idx, ++lastPrimaryIdx) {
       auto param = primary[idx];
       auto pa = builder.resolveArchetype(param)->getRepresentative();
@@ -2004,8 +2029,9 @@ static void collectRequirements(ArchetypeBuilder &builder,
 GenericSignature *ArchetypeBuilder::getGenericSignature(
     ArrayRef<GenericTypeParamType *> genericParamTypes) {
   // Collect the requirements placed on the generic parameter types.
+  SmallVector<GenericTypeParamType *, 8> primary;
   SmallVector<Requirement, 4> requirements;
-  collectRequirements(*this, genericParamTypes, requirements);
+  collectRequirements(*this, genericParamTypes, primary, requirements);
 
   auto sig = GenericSignature::get(genericParamTypes, requirements);
   return sig;

@@ -426,7 +426,7 @@ createGenericParam(ASTContext &ctx, const char *name, unsigned index) {
   auto genericParam =
     new (ctx) GenericTypeParamDecl(&M->getMainFile(FileUnitKind::Builtin),
                                    ident, SourceLoc(), 0, index);
-  genericParam->setArchetype(archetype);
+  genericParam->setArchetype(archetype, /*primary*/ true);
   return { archetype, genericParam };
 }
 
@@ -446,7 +446,7 @@ static GenericParamList *getGenericParams(ASTContext &ctx,
 
   auto paramList = GenericParamList::create(ctx, SourceLoc(), genericParams,
                                             SourceLoc());
-  paramList->setAllArchetypes(ctx.AllocateCopy(archetypes));
+  paramList->setAllArchetypes(ctx.AllocateCopy(archetypes), {});
   return paramList;
 }
 

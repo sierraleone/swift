@@ -2299,7 +2299,6 @@ class TypePrinter : public TypeVisitor<TypePrinter> {
   
   ASTPrinter &Printer;
   const PrintOptions &Options;
-  Optional<std::vector<GenericParamList *>> UnwrappedGenericParams;
 
   void printDeclContext(DeclContext *DC) {
     switch (DC->getContextKind()) {
@@ -2819,7 +2818,7 @@ public:
   /// A helper function to return the depth of a type.
   unsigned getDepthOfType(Type ty) {
     if (auto paramTy = ty->getAs<GenericTypeParamType>())
-      return paramTy->getDepth();
+      return paramTy->getDeclaredDepth();
 
     if (auto depMemTy = dyn_cast<DependentMemberType>(ty->getCanonicalType())) {
       CanType rootTy;
@@ -2827,7 +2826,7 @@ public:
         rootTy = depMemTy.getBase();
       } while ((depMemTy = dyn_cast<DependentMemberType>(rootTy)));
       if (auto rootParamTy = dyn_cast<GenericTypeParamType>(rootTy))
-        return rootParamTy->getDepth();
+        return rootParamTy->getDeclaredDepth();
       return ErrorDepth;
     }
 
@@ -2872,14 +2871,14 @@ public:
     // and requirements according to depth.
     unsigned paramIdx = 0, numParam = genericParams.size();
     while (paramIdx < numParam) {
-      unsigned depth = genericParams[paramIdx]->getDepth();
+      unsigned depth = genericParams[paramIdx]->getDeclaredDepth();
 
       // Move index to genericParams.
       unsigned lastParamIdx = paramIdx;
       do {
         lastParamIdx++;
       } while (lastParamIdx < numParam &&
-               genericParams[lastParamIdx]->getDepth() == depth);
+               genericParams[lastParamIdx]->getDeclaredDepth() == depth);
 
       // Collect requirements for this level.
       // Because of same-type requirements, these aren't well-ordered.
@@ -3107,25 +3106,10 @@ public:
     }
   }
 
-  GenericParamList *getGenericParamListAtDepth(unsigned depth) {
-    assert(Options.ContextGenericParams);
-    if (!UnwrappedGenericParams) {
-      std::vector<GenericParamList *> paramLists;
-      for (auto *params = Options.ContextGenericParams;
-           params;
-           params = params->getOuterParameters()) {
-        paramLists.push_back(params);
-      }
-      UnwrappedGenericParams = std::move(paramLists);
-    }
-    return UnwrappedGenericParams->rbegin()[depth];
-  }
-
   void visitGenericTypeParamType(GenericTypeParamType *T) {
     // Substitute a context archetype if we have context generic params.
     if (Options.ContextGenericParams) {
-      return visit(getGenericParamListAtDepth(T->getDepth())
-                     ->getPrimaryArchetypes()[T->getIndex()]);
+      return visit(Options.ContextGenericParams->resolveInContext(T));
     }
 
     auto Name = T->getName();

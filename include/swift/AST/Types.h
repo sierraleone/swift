@@ -3791,47 +3791,50 @@ DEFINE_EMPTY_CAN_TYPE_WRAPPER(AbstractTypeParamType, SubstitutableType)
 ///
 /// \sa GenericTypeParamDecl
 class GenericTypeParamType : public AbstractTypeParamType {
-  /// The generic type parameter or depth/index.
+  /// The generic type parameter or index.
   llvm::PointerUnion<GenericTypeParamDecl *, llvm::Fixnum<31>>
-    ParamOrDepthIndex;
+    ParamOrIndex;
 
 public:
-  /// Retrieve a generic type parameter at the given depth and index.
-  static GenericTypeParamType *get(unsigned depth, unsigned index,
-                                   const ASTContext &ctx);
+  /// Retrieve a generic type parameter at the given index.
+  static GenericTypeParamType *get(unsigned index, const ASTContext &ctx);
 
   /// Retrieve the declaration of the generic type parameter, or null if
   /// there is no such declaration.
   GenericTypeParamDecl *getDecl() const {
-    return ParamOrDepthIndex.dyn_cast<GenericTypeParamDecl *>();
+    return ParamOrIndex.dyn_cast<GenericTypeParamDecl *>();
   }
 
   /// Get the name of the generic type parameter.
   Identifier getName() const;
-  
-  /// The depth of this generic type parameter, i.e., the number of outer
-  /// levels of generic parameter lists that enclose this type parameter.
-  ///
-  /// \code
-  /// struct X<T> {
-  ///   func f<U>() { }
-  /// }
-  /// \endcode
-  ///
-  /// Here 'T' has depth 0 and 'U' has depth 1. Both have index 0.
-  unsigned getDepth() const;
 
-  /// The index of this generic type parameter within its generic parameter
-  /// list.
+  /// The declared depth of this generic type parameter in the list of
+  /// primary parameters of its context.
+  ///
+  /// In the canonical signature, this is always zero.
+  unsigned getDeclaredDepth() const;
+  
+  /// The index of this generic type parameter in the list of primary type
+  /// parameters of the context.
+  ///
+  /// Swift forms this list by concatenating the declared type parameters of
+  /// the enclosing generic contexts (with outer parameters first) and then
+  /// removing parameters which are constrained to be equal to a concrete
+  /// type or an associated type of another parameter (preferring to keep
+  /// earlier parameters).
   ///
   /// \code
   /// struct X<T, U> {
   ///   func f<V>() { }
+  ///   func g<V: P where P.Element == T>() { }
   /// }
   /// \endcode
   ///
-  /// Here 'T' and 'U' have indexes 0 and 1, respectively. 'V' has index 0.
-  unsigned getIndex() const;
+  /// In 'f', 'T' has index 0, 'U' has index 1, and 'V' has index 2.
+  ///
+  /// In 'g', 'U' has index 0 and 'V' has index 1, and 'T' is no longer a
+  /// primary type parameter.
+  unsigned getDeclaredIndex() const;
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const TypeBase *T) {
@@ -3844,19 +3847,17 @@ private:
   explicit GenericTypeParamType(GenericTypeParamDecl *param)
     : AbstractTypeParamType(TypeKind::GenericTypeParam, nullptr,
                             RecursiveTypeProperties::HasTypeParameter),
-      ParamOrDepthIndex(param) { }
+      ParamOrIndex(param) { }
 
-  explicit GenericTypeParamType(unsigned depth,
-                                unsigned index,
+  explicit GenericTypeParamType(unsigned index,
                                 const ASTContext &ctx)
     : AbstractTypeParamType(TypeKind::GenericTypeParam, &ctx,
                             RecursiveTypeProperties::HasTypeParameter),
-      ParamOrDepthIndex(depth << 16 | index) { }
+      ParamOrIndex(index) { }
 };
 BEGIN_CAN_TYPE_WRAPPER(GenericTypeParamType, AbstractTypeParamType)
-  static CanGenericTypeParamType get(unsigned depth, unsigned index,
-                                     const ASTContext &C) {
-    return CanGenericTypeParamType(GenericTypeParamType::get(depth, index, C));
+  static CanGenericTypeParamType get(unsigned index, const ASTContext &C) {
+    return CanGenericTypeParamType(GenericTypeParamType::get(index, C));
   }
 END_CAN_TYPE_WRAPPER(GenericTypeParamType, AbstractTypeParamType)
 

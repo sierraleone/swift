@@ -4498,7 +4498,7 @@ namespace {
                                                  result, selfId,
                                                  Type(result->getDeclaredType()),
                                                  Type(), false);
-      selfDecl->setArchetype(selfArchetype);
+      selfDecl->setArchetype(selfArchetype, /*primary*/ true);
 
       // Set AllArchetypes of the protocol. ObjC protocols don't have associated
       // types so only the Self archetype is present.

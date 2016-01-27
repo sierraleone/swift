@@ -497,7 +497,7 @@ namespace {
     void visitGenericTypeParamDecl(GenericTypeParamDecl *decl) {
       printAbstractTypeParamCommon(decl, "generic_type_param");
       OS << " depth=" << decl->getDepth() << " index=" << decl->getIndex();
-      OS << ")";
+      OS << " primary=" << decl->declaresPrimaryArchetype() << ")";
     }
 
     void visitAssociatedTypeDecl(AssociatedTypeDecl *decl) {
@@ -2718,10 +2718,13 @@ namespace {
 
     void visitGenericTypeParamType(GenericTypeParamType *T, StringRef label) {
       printCommon(T, label, "generic_type_param_type");
-      printField("depth", T->getDepth());
-      printField("index", T->getIndex());
-      if (auto decl = T->getDecl())
+      if (auto decl = T->getDecl()) {
+        printField("depth", decl->getDepth());
+        printField("index", decl->getIndex());
         printField("decl", decl->printRef());
+      } else {
+        printField("index", T->getDeclaredIndex());        
+      }
       OS << ")";
     }
 

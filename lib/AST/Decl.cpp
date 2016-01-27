@@ -468,6 +468,7 @@ GenericParamList::GenericParamList(SourceLoc LAngleLoc,
                                    MutableArrayRef<RequirementRepr> Requirements,
                                    SourceLoc RAngleLoc)
   : Brackets(LAngleLoc, RAngleLoc), NumParams(Params.size()),
+    NumPrimaryArchetypes(0), Depth(0),
     WhereLoc(WhereLoc), Requirements(Requirements),
     OuterParameters(nullptr),
     FirstTrailingWhereArg(Requirements.size()),
@@ -573,6 +574,72 @@ GenericParamList::getForwardingSubstitutions(ASTContext &C) {
   return C.AllocateCopy(subs);
 }
 
+void GenericParamList::setAllArchetypes(ArrayRef<ArchetypeType*> archetypes,
+                                        ArrayRef<Type> outerParamsInContext) {
+  AllArchetypes = archetypes;
+  AllOuterParamsInContext = outerParamsInContext;
+
+  unsigned i = 0;
+  for (; i != archetypes.size() && archetypes[i]->isPrimary(); ++i) {
+    // do nothing
+  }
+  NumPrimaryArchetypes = i;
+
+#ifndef NDEBUG
+  assert(NumPrimaryArchetypes <= NumParams &&
+         "not all archetypes are parameters?");
+  for (; i != archetypes.size(); ++i) {
+    assert(!archetypes[i]->isPrimary() &&
+           "primary archetype followed non-primary archetype?");
+  }
+
+  i = 0;
+  for (auto param : getParams()) {
+    if (!param->declaresPrimaryArchetype()) continue;
+    assert(param->getArchetype() == archetypes[i] &&
+           "parameter archetype doesn't match primary archetype");
+    i++;
+  }
+  assert(i == NumPrimaryArchetypes &&
+         "number of primary archetypes doesn't match number of parameters "
+         "which are primary archetypes");
+#endif
+}
+
+Type GenericParamList::resolveInContext(GenericTypeParamType *type) const {
+  if (auto decl = type->getDecl()) {
+    return resolveInContext(decl);
+  }
+
+  auto archetype = AllArchetypes[type->getDeclaredIndex()];
+  assert(archetype->isPrimary());
+  return archetype;
+}
+
+static size_t adjustGenericParamIndexForDepth(const GenericParamList *params,
+                                              unsigned depth,
+                                              size_t index) {
+  if (depth > params->getDepth())
+    index += params->getParams().size();
+  if (params->getDepth() == 0)
+    return index;
+  auto outerParams = params->getOuterParameters();
+  assert(outerParams && "non-zero depth but no outer parameters?");
+  return adjustGenericParamIndexForDepth(outerParams, depth, index);
+}
+
+Type GenericParamList::resolveInContext(GenericTypeParamDecl *param) const {
+  unsigned paramDepth = param->getDepth();
+  assert(paramDepth <= getDepth() && "getting parameter from outer param list");
+  if (paramDepth == getDepth()) {
+    return getParams()[param->getIndex()]->getArchetype();
+  }
+
+  size_t index = adjustGenericParamIndexForDepth(this, paramDepth,
+                                                param->getIndex());
+  return AllOuterParamsInContext[index];
+}
+
 // Helper for getAsGenericSignatureElements to remap an archetype in a
 // requirement to a canonical dependent type.
 Type
@@ -622,7 +689,10 @@ GenericParamList::getAsGenericSignatureElements(ASTContext &C,
   for (auto paramIndex : indices(getParams())) {
     auto param = getParams()[paramIndex];
     
-    auto typeParamTy = param->getDeclaredType()->castTo<GenericTypeParamType>();
+    // Check whether we decided that this type is a primary type parameter.
+    auto typeParamTy = param->getDeclaredType()->getAs<GenericTypeParamType>();
+    if (!typeParamTy)
+      continue;
 
     // Make sure we didn't visit this param already in the parent.
     auto found = archetypeMap.find(param->getArchetype());
@@ -735,6 +805,8 @@ GenericParamList::deriveAllArchetypes(ArrayRef<GenericTypeParamDecl *> params,
 
   // Collect all the primary archetypes.
   for (auto param : params) {
+    if (!param->declaresPrimaryArchetype())
+      continue;
     auto archetype = param->getArchetype();
     if (known.insert(archetype).second)
       all.push_back(archetype);
@@ -742,6 +814,8 @@ GenericParamList::deriveAllArchetypes(ArrayRef<GenericTypeParamDecl *> params,
 
   // Collect all the nested archetypes.
   for (auto param : params) {
+    if (!param->declaresPrimaryArchetype())
+      continue;
     auto archetype = param->getArchetype();
     addNestedArchetypes(archetype, known, all);
   }
@@ -2140,7 +2214,7 @@ GenericTypeParamDecl::GenericTypeParamDecl(DeclContext *dc, Identifier name,
                                            SourceLoc nameLoc,
                                            unsigned depth, unsigned index)
   : AbstractTypeParamDecl(DeclKind::GenericTypeParam, dc, name, nameLoc),
-    Depth(depth), Index(index)
+    DeclaresPrimaryArchetype(false), Depth(depth), Index(index)
 {
   auto &ctx = dc->getASTContext();
   auto type = new (ctx, AllocationArena::Permanent) GenericTypeParamType(this);

@@ -318,6 +318,7 @@ public:
   /// \brief Retrieve the archetype that corresponds to the given generic
   /// parameter.
   ArchetypeType *getArchetype(GenericTypeParamDecl *GenericParam);
+  void configureGenericParameter(GenericTypeParamDecl *GenericParam);
 
   /// \brief Retrieve the array of all of the archetypes produced during
   /// archetype assignment. The 'primary' archetypes will occur first in this
@@ -492,6 +493,13 @@ public:
     return ParentOrParam.dyn_cast<PotentialArchetype *>(); 
   }
 
+  PotentialArchetype *getRoot() {
+    auto cur = this;
+    while (auto parent = cur->getParent())
+      cur = parent;
+    return cur;
+  }
+
   /// Retrieve the generic parameter at the root of this potential archetype.
   GenericTypeParamType *getRootParam() const {
     if (auto parent = getParent())
@@ -565,6 +573,15 @@ public:
   const RequirementSource &getSameTypeSource() const {
     return *SameTypeSource;
   }
+
+  bool isRepresentative() const {
+    return Representative == this;
+  }
+
+  /// Given two types that have already been unified, where this is
+  /// currently the representative, switch the other to become the
+  /// representative.
+  void switchRepresentative(PotentialArchetype *other);
 
   /// \brief Retrieve (or create) a nested type with the given name.
   PotentialArchetype *getNestedType(Identifier Name,

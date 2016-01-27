@@ -1084,9 +1084,12 @@ class NestedGenericParamListIterator;
 class GenericParamList {
   SourceRange Brackets;
   unsigned NumParams;
+  unsigned NumPrimaryArchetypes : 16;
+  unsigned Depth : 16;
   SourceLoc WhereLoc;
   MutableArrayRef<RequirementRepr> Requirements;
   ArrayRef<ArchetypeType *> AllArchetypes;
+  ArrayRef<Type> AllOuterParamsInContext;
 
   GenericParamList *OuterParameters;
 
@@ -1155,8 +1158,8 @@ public:
                         SourceLoc(),
                         getRequirements(),
                         SourceLoc());
-    clone->setAllArchetypes(getAllArchetypes());
     clone->setOuterParameters(Outer);
+    clone->setAllArchetypes(getAllArchetypes(), AllOuterParamsInContext);
     return clone;
   }
   
@@ -1188,7 +1191,7 @@ public:
   unsigned totalSize() const {
     return NumParams + (OuterParameters ? OuterParameters->totalSize() : 0);
   }
-  
+
   /// \brief Retrieve the location of the 'where' keyword, or an invalid
   /// location if 'where' was not present.
   SourceLoc getWhereLoc() const { return WhereLoc; }
@@ -1247,7 +1250,8 @@ public:
 
   /// \brief Return the number of primary archetypes.
   unsigned getNumPrimaryArchetypes() const {
-    return size();
+    assert(NumPrimaryArchetypes != 0 && "archetypes not yet set!");
+    return NumPrimaryArchetypes;
   }
   
   /// \brief Retrieves the list containing only the primary archetypes described
@@ -1263,11 +1267,8 @@ public:
   }
 
   /// \brief Sets all archetypes *without* copying the source array.
-  void setAllArchetypes(ArrayRef<ArchetypeType *> AA) {
-    assert(AA.size() >= size()
-           && "allArchetypes is smaller than number of generic params?!");
-    AllArchetypes = AA;
-  }
+  void setAllArchetypes(ArrayRef<ArchetypeType *> allArchetypes,
+                        ArrayRef<Type> allOuterGenericParams);
 
   using NestedArchetypeIterator
     = NestedGenericParamListIterator<ArchetypeType*,
@@ -1306,7 +1307,11 @@ public:
 
   /// \brief Set the outer generic parameter list. See \c getOuterParameters
   /// for more information.
-  void setOuterParameters(GenericParamList *Outer) { OuterParameters = Outer; }
+  void setOuterParameters(GenericParamList *Outer) {
+    Depth = (Outer ? Outer->getDepth() + 1 : 0);
+    OuterParameters = Outer;
+  }
+
 
   SourceLoc getLAngleLoc() const { return Brackets.Start; }
   SourceLoc getRAngleLoc() const { return Brackets.End; }
@@ -1334,11 +1339,17 @@ public:
 
   /// Retrieve the depth of this generic parameter list.
   unsigned getDepth() const {
-    unsigned depth = 0;
-    for (auto gp = getOuterParameters(); gp; gp = gp->getOuterParameters())
-      ++depth;
-    return depth;
+    assert((Depth == 0) == (OuterParameters == nullptr));
+    return Depth;
   }
+
+  /// Given a generic type parameter of this context or one of its parents,
+  /// resolve it in this context.
+  Type resolveInContext(GenericTypeParamType *param) const;
+
+  /// Given a generic type parameter of this context or one of its parents,
+  /// resolve it in this context.
+  Type resolveInContext(GenericTypeParamDecl *param) const;
   
   /// Get the generic parameter list as a GenericSignature in which the generic
   /// parameters have been canonicalized.
@@ -2481,7 +2492,8 @@ public:
 /// func min<T : Comparable>(x : T, y : T) -> T { ... }
 /// \endcode
 class GenericTypeParamDecl : public AbstractTypeParamDecl {
-  unsigned Depth : 16;
+  unsigned DeclaresPrimaryArchetype : 1;
+  unsigned Depth : 15;
   unsigned Index : 16;
 
 public:
@@ -2524,6 +2536,18 @@ public:
   ///
   /// Here 'T' and 'U' have indexes 0 and 1, respectively. 'V' has index 0.
   unsigned getIndex() const { return Index; }
+
+  /// Set the archetype used to describe this abstract type parameter within
+  /// its scope.
+  void setArchetype(ArchetypeType *archetype, bool isPrimary) {
+    DeclaresPrimaryArchetype = isPrimary;
+    AbstractTypeParamDecl::setArchetype(archetype);
+  }
+
+  bool declaresPrimaryArchetype() const {
+    assert(getArchetype() && "archetype not set yet");
+    return DeclaresPrimaryArchetype;
+  }
 
   SourceLoc getStartLoc() const { return getNameLoc(); }
   SourceRange getSourceRange() const;
