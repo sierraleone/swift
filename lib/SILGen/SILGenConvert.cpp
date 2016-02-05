@@ -235,7 +235,12 @@ ManagedValue SILGenFunction::emitCheckedGetOptionalValueFrom(SILLocation loc,
     src = emitManagedBufferWithCleanup(buf);
   }
 
-  return emitApplyOfLibraryIntrinsic(loc, fn, sub, src, C);
+  RValue result = emitApplyOfLibraryIntrinsic(loc, fn, sub, src, C);
+  if (result) {
+    return std::move(result).getAsSingleValue(*this, loc);
+  } else {
+    return ManagedValue::forInContext();
+  }
 }
 
 ManagedValue SILGenFunction::emitUncheckedGetOptionalValueFrom(SILLocation loc,

@@ -133,14 +133,14 @@ struct ArgumentDescriptor {
   /// The original index of this argument.
   unsigned Index;
 
-  /// The original parameter info of this argument.
-  SILParameterInfo ParameterInfo;
-
   /// The original decl of this Argument.
   const ValueDecl *Decl;
 
   /// Was this parameter originally dead?
   bool IsDead;
+
+  /// Is this parameter an indirect result?
+  bool IsIndirectResult;
 
   /// If non-null, this is the release in the return block of the callee, which
   /// is associated with this parameter if it is @owned. If the parameter is not
@@ -164,9 +164,10 @@ struct ArgumentDescriptor {
   /// have access to the original argument's state if we modify the argument
   /// when optimizing.
   ArgumentDescriptor(llvm::BumpPtrAllocator &BPA, SILArgument *A)
-      : Arg(A), Index(A->getIndex()), ParameterInfo(A->getParameterInfo()),
-        Decl(A->getDecl()), IsDead(false), CalleeRelease(),
-        CalleeReleaseInThrowBlock(),
+      : Arg(A), Index(A->getIndex()),
+        Decl(A->getDecl()), IsDead(false),
+        IsIndirectResult(A->isIndirectResult()),
+        CalleeRelease(), CalleeReleaseInThrowBlock(),
         ProjTree(A->getModule(), BPA, A->getType()) {
     ProjTree.computeUsesAndLiveness(A);
   }
@@ -176,8 +177,8 @@ struct ArgumentDescriptor {
   ArgumentDescriptor &operator=(const ArgumentDescriptor &) = delete;
   ArgumentDescriptor &operator=(ArgumentDescriptor &&) = default;
 
-  /// \returns true if this argument's ParameterConvention is P.
-  bool hasConvention(ParameterConvention P) const {
+  /// \returns true if this argument's convention is P.
+  bool hasConvention(SILArgumentConvention P) const {
     return Arg->hasConvention(P);
   }
 
@@ -205,7 +206,7 @@ struct ArgumentDescriptor {
                                  unsigned ArgOffset);
 
   bool canOptimizeLiveArg() const {
-    return ParameterInfo.getSILType().isObject();
+    return Arg->getType().isObject();
   }
 
   /// Return true if it's both legal and a good idea to explode this argument.
@@ -235,6 +236,14 @@ void ArgumentDescriptor::computeOptimizedInterfaceParams(
     DEBUG(llvm::dbgs() << "            Dead!\n");
     return;
   }
+
+  // If we have an indirect result, bail.
+  if (IsIndirectResult) {
+    DEBUG(llvm::dbgs() << "            Indirect result.\n");
+    return;
+  }
+
+  auto ParameterInfo = Arg->getKnownParameterInfo();
 
   // If this argument is live, but we cannot optimize it.
   if (!canOptimizeLiveArg()) {
@@ -511,7 +520,7 @@ private:
 /// it returns false.
 bool ParameterAnalyzer::analyze() {
   // For now ignore functions with indirect results.
-  if (F->getLoweredFunctionType()->hasIndirectResult())
+  if (F->getLoweredFunctionType()->hasIndirectResults())
     return false;
 
   ArrayRef<SILArgument *> Args = F->begin()->getBBArgs();
@@ -542,7 +551,7 @@ bool ParameterAnalyzer::analyze() {
 
     // See if we can find a ref count equivalent strong_release or release_value
     // at the end of this function if our argument is an @owned parameter.
-    if (A.hasConvention(ParameterConvention::Direct_Owned)) {
+    if (A.hasConvention(SILArgumentConvention::Direct_Owned)) {
       auto Releases = ArgToReturnReleaseMap.getReleasesForArgument(A.Arg);
       if (!Releases.empty()) {
 
@@ -637,7 +646,7 @@ CanSILFunctionType SignatureOptimizer::createOptimizedSILFunctionType() {
     ArgDesc.computeOptimizedInterfaceParams(InterfaceParams);
   }
 
-  SILResultInfo InterfaceResult = FTy->getResult();
+  auto InterfaceResults = FTy->getAllResults();
   auto InterfaceErrorResult = FTy->getOptionalErrorResult();
   auto ExtInfo = FTy->getExtInfo();
 
@@ -647,7 +656,7 @@ CanSILFunctionType SignatureOptimizer::createOptimizedSILFunctionType() {
 
   return SILFunctionType::get(FTy->getGenericSignature(), ExtInfo,
                               FTy->getCalleeConvention(), InterfaceParams,
-                              InterfaceResult, InterfaceErrorResult, Ctx);
+                              InterfaceResults, InterfaceErrorResult, Ctx);
 }
 
 SILFunction *SignatureOptimizer::createEmptyFunctionWithOptimizedSig(
@@ -852,7 +861,7 @@ moveFunctionBodyToNewFunctionWithName(SILFunction *F,
   // Otherwise generate the thunk body just in case.
   SILBasicBlock *ThunkBody = F->createBasicBlock();
   for (auto &ArgDesc : ArgDescs) {
-    ThunkBody->createBBArg(ArgDesc.ParameterInfo.getSILType(), ArgDesc.Decl);
+    ThunkBody->createBBArg(ArgDesc.Arg->getType(), ArgDesc.Decl);
   }
   createThunkBody(ThunkBody, NewF, Optimizer);
 

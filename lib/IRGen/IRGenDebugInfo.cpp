@@ -601,8 +601,7 @@ IRGenDebugInfo::createParameterTypes(CanSILFunctionType FnTy,
   GenericContextScope scope(IGM, FnTy->getGenericSignature());
 
   // The function return type is the first element in the list.
-  createParameterType(Parameters, FnTy->getSemanticResultSILType(),
-                      DeclCtx);
+  createParameterType(Parameters, FnTy->getSILResult(), DeclCtx);
 
   // Actually, the input type is either a single type or a tuple
   // type. We currently represent a function with one n-tuple argument
