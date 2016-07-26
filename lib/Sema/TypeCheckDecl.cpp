@@ -1640,6 +1640,7 @@ static void checkAccessibility(TypeChecker &TC, const Decl *D) {
   case DeclKind::InfixOperator:
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:
+  case DeclKind::PrecedenceGroup:
   case DeclKind::Module:
     llvm_unreachable("cannot appear in a type context");
 
@@ -3068,6 +3069,202 @@ static void checkVarBehavior(VarDecl *decl, TypeChecker &TC) {
   return;
 }
 
+static void buildVisitedFromPath(PrecedenceGroupDecl *last,
+                          const llvm::DenseMap<PrecedenceGroupDecl *,
+                                        PrecedenceGroupDecl *> &visitedFrom,
+                          raw_ostream &out) {
+  auto it = visitedFrom.find(last);
+  assert(it != visitedFrom.end());
+  auto from = it->second;
+  if (from) {
+    buildVisitedFromPath(from, visitedFrom, out);
+    out << " -> ";
+  }
+  out << last->getName();
+}
+
+static void checkPrecedenceCircularity(TypeChecker &TC,
+                                       PrecedenceGroupDecl *PGD) {
+  // Don't diagnose if this group is already marked invalid.
+  if (PGD->isInvalid()) return;
+
+  // The cycle doesn't necessarily go through this specific group,
+  // so we need a proper visited set to avoid infinite loops.  We
+  // also record a back-reference so that we can easily reconstruct
+  // the cycle.
+  llvm::DenseMap<PrecedenceGroupDecl*, PrecedenceGroupDecl*> visitedFrom;
+  SmallVector<PrecedenceGroupDecl*, 4> stack;
+
+  visitedFrom.insert({PGD, nullptr});
+  stack.push_back(PGD);
+  do {
+    auto cur = stack.pop_back_val();
+
+    // If we reach an invalid node, just bail out.
+    if (cur->isInvalid()) return;
+
+    for (auto &rel : cur->getHigherThan()) {
+      if (!rel.Group) continue;
+
+      // If we haven't visited this group before, add it to the queue
+      // and continue.
+      if (!visitedFrom.insert({rel.Group, cur}).second) {
+        stack.push_back(rel.Group);
+        continue;
+      }
+
+      // Okay, we have a cycle.  If it doesn't go through this group,
+      // ignore it.
+      if (rel.Group != PGD) continue;
+
+      SmallString<128> path;
+      {
+        llvm::raw_svector_ostream str(path);
+        buildVisitedFromPath(cur, visitedFrom, str);
+        str << PGD->getName();
+      }
+      
+      TC.diagnose(rel.NameLoc, diag::precedence_group_cycle, path);
+      PGD->setInvalid();
+      return;
+    }
+  } while (!stack.empty());
+}
+
+/// Do a primitive lookup for the given precedence group.  This does
+/// not validate the precedence group or diagnose if the lookup fails
+/// (other than via ambiguity); for that, use
+/// TypeChecker::lookupPrecedenceGroup.
+///
+/// Pass an invalid source location to suppress diagnostics.
+static PrecedenceGroupDecl *
+lookupPrecedenceGroupPrimitive(DeclContext *dc, Identifier name,
+                               SourceLoc nameLoc) {
+  if (auto sf = dc->getParentSourceFile()) {
+    bool cascading = dc->isCascadingContextForLookup(false);
+    return sf->lookupPrecedenceGroup(name, cascading, nameLoc);
+  } else {
+    return dc->getParentModule()->lookupPrecedenceGroup(name, nameLoc);
+  }
+}
+
+void TypeChecker::validateDecl(PrecedenceGroupDecl *PGD) {
+  checkDeclAttributesEarly(PGD);
+  checkDeclAttributes(PGD);
+
+  if (PGD->isInvalid() || PGD->isBeingTypeChecked())
+    return;
+  PGD->setIsBeingTypeChecked(true);
+  SWIFT_DEFER { PGD->setIsBeingTypeChecked(false); };
+
+  bool isInvalid = false;
+
+  // Validate the higherThan relationships.
+  bool addedHigherThan = false;
+  for (auto &rel : PGD->getMutableHigherThan()) {
+    if (rel.Group) continue;
+
+    auto group = lookupPrecedenceGroupPrimitive(PGD->getDeclContext(),
+                                                rel.Name, rel.NameLoc);
+    if (group) {
+      rel.Group = group;
+      validateDecl(group);
+      addedHigherThan = true;
+    } else if (!PGD->isInvalid()) {
+      diagnose(rel.NameLoc, diag::unknown_precedence_group, rel.Name);
+      isInvalid = true;
+    }
+  }
+
+  // Validate the lowerThan relationships.
+  for (auto &rel : PGD->getMutableLowerThan()) {
+    if (rel.Group) continue;
+
+    auto dc = PGD->getDeclContext();
+    auto group = lookupPrecedenceGroupPrimitive(dc, rel.Name, rel.NameLoc);
+    if (group) {
+      if (group->getDeclContext()->getParentModule()
+            == dc->getParentModule()) {
+        if (!PGD->isInvalid()) {
+          diagnose(rel.NameLoc, diag::precedence_group_lower_within_module);
+          diagnose(group->getNameLoc(), diag::precedence_group_declared_here);
+        }
+      } else {
+        rel.Group = group;
+        validateDecl(group);
+      }
+    } else if (!PGD->isInvalid()) {
+      diagnose(rel.NameLoc, diag::unknown_precedence_group, rel.Name);
+      isInvalid = true;
+    }
+  }
+
+  // Check for circularity.
+  if (addedHigherThan) {
+    checkPrecedenceCircularity(*this, PGD);
+  }
+
+  if (isInvalid) PGD->setInvalid();
+}
+
+PrecedenceGroupDecl *TypeChecker::lookupPrecedenceGroup(DeclContext *dc,
+                                                        Identifier name,
+                                                        SourceLoc nameLoc) {
+  auto group = lookupPrecedenceGroupPrimitive(dc, name, nameLoc);
+  if (group) {
+    validateDecl(group);
+  } else if (nameLoc.isValid()) {
+    // FIXME: avoid dignosing this multiple times per source file.
+    diagnose(nameLoc, diag::unknown_precedence_group, name);
+  }
+  return group;
+}
+
+/// Validate the given operator declaration.
+///
+/// This establishes key invariants, such as an InfixOperatorDecl's
+/// reference to its precedence group and the transitive validity of that
+/// group.
+void TypeChecker::validateDecl(OperatorDecl *OD) {
+  checkDeclAttributesEarly(OD);
+  checkDeclAttributes(OD);
+
+  if (auto IOD = dyn_cast<InfixOperatorDecl>(OD)) {
+    if (!IOD->getPrecedenceGroup()) {
+      PrecedenceGroupDecl *group = nullptr;
+
+      // If a name was given, try to look it up.
+      Identifier name = IOD->getPrecedenceGroupName();
+      if (!name.empty()) {
+        auto loc = IOD->getPrecedenceGroupNameLoc();
+        group = lookupPrecedenceGroupPrimitive(OD->getDeclContext(), name, loc);
+        if (!group && !IOD->isInvalid()) {
+          diagnose(loc, diag::unknown_precedence_group, name);
+          IOD->setInvalid();
+        }
+      }
+
+      // If that fails, or if a name was not given, use the default
+      // precedence group.
+      if (!group) {
+        group = lookupPrecedenceGroupPrimitive(OD->getDeclContext(),
+                                               Context.Id_DefaultPrecedence,
+                                               SourceLoc());
+        if (!group && name.empty() && !IOD->isInvalid()) {
+          diagnose(OD->getLoc(), diag::missing_builtin_precedence_group,
+                   Context.Id_DefaultPrecedence);
+        }
+      }
+
+      // Validate the precedence group.
+      if (group) {
+        validateDecl(group);
+        IOD->setPrecedenceGroup(group);
+      }
+    }
+  }
+}
+
 namespace {
 class DeclChecker : public DeclVisitor<DeclChecker> {
 public:
@@ -3130,8 +3327,11 @@ public:
   }
 
   void visitOperatorDecl(OperatorDecl *OD) {
-    TC.checkDeclAttributesEarly(OD);
-    TC.checkDeclAttributes(OD);
+    TC.validateDecl(OD);
+  }
+
+  void visitPrecedenceGroupDecl(PrecedenceGroupDecl *PGD) {
+    TC.validateDecl(PGD);
   }
 
   void visitBoundVariable(VarDecl *VD) {
@@ -6478,6 +6678,7 @@ void TypeChecker::validateDecl(ValueDecl *D, bool resolveTypeParams) {
   case DeclKind::InfixOperator:
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:
+  case DeclKind::PrecedenceGroup:
   case DeclKind::IfConfig:
     llvm_unreachable("not a value decl");
 
@@ -6887,6 +7088,7 @@ void TypeChecker::validateAccessibility(ValueDecl *D) {
   case DeclKind::InfixOperator:
   case DeclKind::PrefixOperator:
   case DeclKind::PostfixOperator:
+  case DeclKind::PrecedenceGroup:
   case DeclKind::IfConfig:
     llvm_unreachable("not a value decl");
 

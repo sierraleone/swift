@@ -1,6 +1,6 @@
 // RUN: %target-parse-verify-swift
 
-infix operator +++ {}
+infix operator +++
 
 protocol ConcatToAnything {
   static func +++ <T>(lhs: Self, other: T)
@@ -106,7 +106,7 @@ protocol BinaryMethodWorkaround {
 protocol Squigglable : BinaryMethodWorkaround {
 }
 
-infix operator ~~~ { }
+infix operator ~~~
 
 func ~~~ <T : Squigglable where T.MySelf == T>(lhs: T, rhs: T) -> Bool {
   return true

@@ -1,14 +1,13 @@
 
-infix operator %%% {
-  associativity left
-  precedence 200
+infix operator %%% : High
+precedencegroup High {
+  associativity: left
+  higherThan: BitwiseShiftPrecedence
 }
 
-postfix operator =-> {
-}
+postfix operator =->
 
-postfix operator => {
-}
+postfix operator =>
 
 func %%%(lhs: Int, rhs: Int) -> Int
 

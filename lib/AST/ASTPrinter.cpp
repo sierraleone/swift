@@ -2967,6 +2967,17 @@ void PrintAST::visitInfixOperatorDecl(InfixOperatorDecl *decl) {
     [&]{
       Printer.printName(decl->getName());
     });
+  if (!decl->getPrecedenceGroupName().empty()) {
+    Printer << " : " << decl->getPrecedenceGroupName();
+  }
+}
+
+void PrintAST::visitPrecedenceGroupDecl(PrecedenceGroupDecl *decl) {
+  Printer << tok::kw_precedencegroup << ' ';
+  recordDeclLoc(decl,
+    [&]{
+      Printer.printName(decl->getName());
+    });
   Printer << " {";
   Printer.printNewline();
   {
@@ -2974,7 +2985,7 @@ void PrintAST::visitInfixOperatorDecl(InfixOperatorDecl *decl) {
     if (!decl->isAssociativityImplicit()) {
       indent();
       Printer.printKeyword("associativity");
-      Printer << " ";
+      Printer << ": ";
       switch (decl->getAssociativity()) {
       case Associativity::None:
         Printer.printKeyword("none");
@@ -2988,18 +2999,33 @@ void PrintAST::visitInfixOperatorDecl(InfixOperatorDecl *decl) {
       }
       Printer.printNewline();
     }
-    if (!decl->isPrecedenceImplicit()) {
-      indent();
-      Printer.printKeyword("precedence");
-      Printer << " " << decl->getPrecedence();
-      Printer.printNewline();
-    }
     if (!decl->isAssignmentImplicit()) {
       indent();
-      if (decl->isAssignment())
-        Printer.printKeyword("assignment");
-      else
-        Printer << "/* not assignment */";
+      Printer.printKeyword("assignment");
+      Printer << ": ";
+      Printer.printKeyword(decl->isAssignment() ? "true" : "false");
+      Printer.printNewline();
+    }
+    if (!decl->isHigherThanImplicit()) {
+      indent();
+      Printer.printKeyword("higherThan");
+      Printer << ": ";
+      if (!decl->getHigherThan().empty()) {
+        Printer << decl->getHigherThan()[0].Name;
+        for (auto &rel : decl->getHigherThan().slice(1))
+          Printer << ", " << rel.Name;
+      }
+      Printer.printNewline();
+    }
+    if (!decl->isLowerThanImplicit()) {
+      indent();
+      Printer.printKeyword("lowerThan");
+      Printer << ": ";
+      if (!decl->getLowerThan().empty()) {
+        Printer << decl->getLowerThan()[0].Name;
+        for (auto &rel : decl->getLowerThan().slice(1))
+          Printer << ", " << rel.Name;
+      }
       Printer.printNewline();
     }
   }
@@ -3014,9 +3040,6 @@ void PrintAST::visitPrefixOperatorDecl(PrefixOperatorDecl *decl) {
     [&]{
       Printer.printName(decl->getName());
     });
-  Printer << " {";
-  Printer.printNewline();
-  Printer << "}";
 }
 
 void PrintAST::visitPostfixOperatorDecl(PostfixOperatorDecl *decl) {
@@ -3026,9 +3049,6 @@ void PrintAST::visitPostfixOperatorDecl(PostfixOperatorDecl *decl) {
     [&]{
       Printer.printName(decl->getName());
     });
-  Printer << " {";
-  Printer.printNewline();
-  Printer << "}";
 }
 
 void PrintAST::visitModuleDecl(ModuleDecl *decl) { }

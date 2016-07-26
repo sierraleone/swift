@@ -80,9 +80,10 @@ func basictest() {
 }
 
 // Infix operators and attribute lists.
-infix operator %% {
-  associativity left
-  precedence 2
+infix operator %% : MinPrecedence
+precedencegroup MinPrecedence {
+  associativity: left
+  lowerThan: AssignmentPrecedence
 }
 
 func %%(a: Int, b: Int) -> () {}
@@ -179,7 +180,7 @@ func foo1(_ a: Int, b: Int) -> Int {}
 func foo2(_ a: Int) -> (b: Int) -> Int {}
 func foo3(_ a: Int = 2, b: Int = 3) {}
 
-prefix operator ^^ {}
+prefix operator ^^
 
 prefix func ^^(a: Int) -> Int {
   return a + 1
