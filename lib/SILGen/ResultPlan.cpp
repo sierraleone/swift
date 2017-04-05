@@ -323,6 +323,7 @@ public:
         SGF.emitTemporaryAllocation(loc, errorTL.getLoweredType());
 
     // Nil-initialize it.
+    // TODO: use begin_access if necessary
     SGF.emitInjectOptionalNothingInto(loc, errorTemp, errorTL);
 
     // Enter a cleanup to destroy the value there.
@@ -330,6 +331,7 @@ public:
 
     // Create the appropriate pointer type.
     lvalue = LValue::forAddress(ManagedValue::forLValue(errorTemp),
+                                /*TODO: enforcement*/ None,
                                 AbstractionPattern(errorType), errorType);
   }
 

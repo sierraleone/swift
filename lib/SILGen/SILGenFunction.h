@@ -524,6 +524,32 @@ public:
     return SGM.Types.getConstantInfo(constant);
   }
 
+  bool shouldUseUnsafeEnforcement(VarDecl *var) {
+    return false; // TODO
+  }
+
+  Optional<SILAccessEnforcement> getStaticEnforcement(VarDecl *var = nullptr) {
+    if (getOptions().EnforceExclusivityStatic)
+      return SILAccessEnforcement::Static;
+    return None;
+  }
+
+  Optional<SILAccessEnforcement> getDynamicEnforcement(VarDecl *var = nullptr) {
+    if (getOptions().EnforceExclusivityDynamic) {
+      if (var && shouldUseUnsafeEnforcement(var))
+        return SILAccessEnforcement::Unsafe;
+      return SILAccessEnforcement::Dynamic;
+    }
+    return None;
+  }
+
+  Optional<SILAccessEnforcement> getUnknownEnforcement(VarDecl *var = nullptr) {
+    if (getOptions().EnforceExclusivityStatic ||
+        getOptions().EnforceExclusivityDynamic)
+      return SILAccessEnforcement::Unknown;
+    return None;
+  }
+
   SourceManager &getSourceManager() { return SGM.M.getASTContext().SourceMgr; }
 
   /// Push a new debug scope and set its parent pointer.
@@ -1088,13 +1114,24 @@ public:
   SILValue emitDynamicMethodRef(SILLocation loc, SILDeclRef constant,
                                 SILConstantInfo constantInfo);  
 
-  /// Emit the specified VarDecl as an LValue if possible, otherwise return
-  /// null.
-  ManagedValue emitLValueForDecl(SILLocation loc, VarDecl *var,
-                                 CanType formalRValueType,
-                                 AccessKind accessKind,
-                                 AccessSemantics semantics
-                                   = AccessSemantics::Ordinary);
+  struct UnaccessedAddress {
+    ManagedValue Address;
+    Optional<SILAccessEnforcement> Enforcement;  
+  };
+
+  /// Emit an LValue for accessing the specified VarDecl.
+  LValue
+  emitLValueForDecl(SILLocation loc, VarDecl *var, CanType formalRValueType,
+                    AccessKind accessKind,
+                    AccessSemantics semantics = AccessSemantics::Ordinary);
+
+  /// Emit an LValue for directly accessing the specified VarDecl's storage.
+  LValue
+  emitRawLValueForDecl(SILLocation loc, VarDecl *var, CanType formalRValueType,
+                       AccessKind accessKind,
+                       AccessSemantics semantics = AccessSemantics::Ordinary);
+
+  SILValue getRawAddressOfLocal(VarDecl *var);
   
   /// Produce an RValue for a reference to the specified declaration,
   /// with the given type and in response to the specified expression.  Try to

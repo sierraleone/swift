@@ -478,49 +478,6 @@ SILValue SILGenFunction::emitEmptyTuple(SILLocation loc) {
                getLoweredType(TupleType::getEmpty(SGM.M.getASTContext())), {});
 }
 
-/// Emit the specified declaration as an address if possible,
-/// otherwise return null.
-ManagedValue SILGenFunction::emitLValueForDecl(SILLocation loc, VarDecl *var,
-                                               CanType formalRValueType,
-                                               AccessKind accessKind,
-                                               AccessSemantics semantics) {
-  // For local decls, use the address we allocated or the value if we have it.
-  auto It = VarLocs.find(var);
-  if (It != VarLocs.end()) {
-    // If this has an address, return it.  By-value let's have no address.
-    SILValue ptr = It->second.value;
-    if (ptr->getType().isAddress())
-      return ManagedValue::forLValue(ptr);
-    
-    // Otherwise, it is an RValue let.
-    return ManagedValue();
-  }
-
-  switch (var->getAccessStrategy(semantics, accessKind)) {
-  case AccessStrategy::Storage:
-    // The only kind of stored variable that should make it to here is
-    // a global variable.  Just invoke its accessor function to get its
-    // address.
-    return emitGlobalVariableRef(loc, var);
-
-  case AccessStrategy::Addressor: {
-    LValue lvalue =
-      emitLValueForAddressedNonMemberVarDecl(loc, var, formalRValueType,
-                                             accessKind, semantics);
-    return emitAddressOfLValue(loc, std::move(lvalue), accessKind);
-  }
-
-  case AccessStrategy::DirectToAccessor:
-  case AccessStrategy::DispatchToAccessor:
-    return ManagedValue();
-    
-  case AccessStrategy::BehaviorStorage:
-    // TODO: Behaviors aren't supported on non-instance properties yet.
-    llvm_unreachable("not implemented");
-  }
-  llvm_unreachable("bad access strategy");
-}
-
 namespace {
 
 /// Thie is a simple cleanup class that is only meant to help with delegating
@@ -671,96 +628,11 @@ emitRValueForDecl(SILLocation loc, ConcreteDeclRef declRef, Type ncRefType,
     assert(!declRef.isSpecialized() &&
            "Cannot handle specialized variable references");
 
-    // If this VarDecl is represented as an address, emit it as an lvalue, then
-    // perform a load to get the rvalue.
-    if (ManagedValue result =
-            emitLValueForDecl(loc, var, refType, AccessKind::Read, semantics)) {
-      bool guaranteedValid = false;
-      IsTake_t shouldTake = IsNotTake;
+    bool guaranteedValid = var->isLet();
 
-      // We should only end up in this path for local and global variables,
-      // i.e. ones whose lifetime is assured for the duration of the evaluation.
-      // Therefore, if the variable is a constant, the value is guaranteed
-      // valid as well.
-      if (var->isLet())
-        guaranteedValid = true;
-
-      // If we have self, see if we are in an 'init' delegation sequence. If so,
-      // call out to the special delegation init routine. Otherwise, use the
-      // normal RValue emission logic.
-      if (var->getName() == getASTContext().Id_self &&
-          SelfInitDelegationState != NormalSelf) {
-        return emitRValueForSelfInDelegationInit(loc, refType,
-                                                 result.getLValueAddress(), C);
-      }
-
-      return RValue(*this, loc, refType,
-                    emitLoad(loc, result.getLValueAddress(),
-                             getTypeLowering(refType), C, shouldTake,
-                             guaranteedValid));
-    }
-
-    // For local decls, use the address we allocated or the value if we have it.
-    auto It = VarLocs.find(decl);
-    if (It != VarLocs.end()) {
-      // Mutable lvalue and address-only 'let's are LValues.
-      assert(!It->second.value->getType().isAddress() &&
-             "LValue cases should be handled above");
-
-      SILValue Scalar = It->second.value;
-
-      // For weak and unowned types, convert the reference to the right
-      // pointer.
-      if (Scalar->getType().is<ReferenceStorageType>()) {
-        Scalar = emitConversionToSemanticRValue(loc, Scalar,
-                                                getTypeLowering(refType));
-        // emitConversionToSemanticRValue always produces a +1 strong result.
-        return RValue(*this, loc,
-                      refType, emitManagedRValueWithCleanup(Scalar));
-      }
-
-      // This is a let, so we can make guarantees, so begin the borrow scope.
-      ManagedValue Result = emitManagedBeginBorrow(loc, Scalar);
-
-      // If the client can't handle a +0 result, retain it to get a +1.
-      // This is a 'let', so we can make guarantees.
-      return RValue(*this, loc, refType,
-                    C.isGuaranteedPlusZeroOk()
-                      ? Result : Result.copyUnmanaged(*this, loc));
-    }
-
-    assert(var->hasAccessorFunctions() && "Unknown rvalue case");
-
-    bool isDirectAccessorUse = (semantics == AccessSemantics::DirectToAccessor);
-    SILDeclRef getter = getGetterDeclRef(var, isDirectAccessorUse);
-
-    ArgumentSource selfSource;
-    
-    // Global properties have no base or subscript. Static properties
-    // use the metatype as their base.
-    // FIXME: This has to be dynamically looked up for classes, and
-    // dynamically instantiated for generics.
-    if (var->isStatic()) {
-      auto baseTy = cast<NominalTypeDecl>(var->getDeclContext())
-        ->getDeclaredInterfaceType();
-      assert(!baseTy->is<BoundGenericType>() &&
-             "generic static stored properties not implemented");
-      assert((baseTy->getStructOrBoundGenericStruct() ||
-              baseTy->getEnumOrBoundGenericEnum()) &&
-             "static stored properties for classes/protocols not implemented");
-      auto baseMeta = MetatypeType::get(baseTy)->getCanonicalType();
-
-      auto metatype = B.createMetatype(loc,
-                                       getLoweredLoadableType(baseMeta));
-      auto metatypeMV = ManagedValue::forUnmanaged(metatype);
-      auto metatypeRV = RValue(*this, loc, baseMeta, metatypeMV);
-      selfSource = ArgumentSource(loc, std::move(metatypeRV));
-    }
-    return emitGetAccessor(loc, getter,
-                           SGM.getNonMemberVarDeclSubstitutions(var),
-                           std::move(selfSource),
-                           /*isSuper=*/false, isDirectAccessorUse,
-                           RValue(), C);
+    LValue lvalue =
+      emitLValueForDecl(loc, var, refType, AccessKind::Read, semantics);
+    return emitLoadOfLValue(loc, std::move(lvalue), C, guaranteedValid);
   }
   
   // If the referenced decl isn't a VarDecl, it should be a constant of some
@@ -2564,9 +2436,7 @@ RValue RValueEmitter::visitRebindSelfInConstructorExpr(
   ManagedValue newSelf = computeNewSelfForRebindSelfInConstructorExpr(SGF, E);
 
   // We know that self is a box, so get its address.
-  SILValue selfAddr =
-    SGF.emitLValueForDecl(E, selfDecl, selfTy->getCanonicalType(),
-                          AccessKind::Write).getLValueAddress();
+  SILValue selfAddr = SGF.getRawAddressOfLocal(selfDecl);
 
   // Handle a nested optional case (see above).
   if (extraFailability != OTK_None)

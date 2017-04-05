@@ -103,6 +103,7 @@ public:
 
     // Logical LValue kinds
     GetterSetterKind,           // property or subscript getter/setter
+    RValueKind,                 // an r-value
     OwnershipKind,              // weak pointer remapping
     AutoreleasingWritebackKind, // autorelease pointer on set
     WritebackPseudoKind,        // a fake component to customize writeback
@@ -343,6 +344,7 @@ public:
                          CanType substFormalType);
 
   static LValue forAddress(ManagedValue address,
+                           Optional<SILAccessEnforcement> enforcement,
                            AbstractionPattern origFormalType,
                            CanType substFormalType);
 

@@ -768,10 +768,7 @@ static ManagedValue emitSelfForMemberInit(SILGenFunction &SGF, SILLocation loc,
                                  SGFContext::AllowImmediatePlusZero)
       .getAsSingleValue(SGF, loc);
   else
-    return SGF.emitLValueForDecl(loc, selfDecl,
-                                 selfDecl->getType()->getCanonicalType(),
-                                 AccessKind::Write,
-                                 AccessSemantics::DirectToStorage);
+    return ManagedValue::forLValue(SGF.getRawAddressOfLocal(selfDecl));
 }
 
 static LValue emitLValueForMemberInit(SILGenFunction &SGF, SILLocation loc,
