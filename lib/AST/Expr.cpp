@@ -214,6 +214,79 @@ DeclRefExpr *Expr::getMemberOperatorRef() {
   return operatorRef;
 }
 
+namespace {
+class StorageReferenceClassifier
+    : public ExprVisitor<StorageReferenceClassifier, bool> {
+  using super = ASTVisitor;
+  llvm::DenseMap<OpaqueValueExpr*, Expr*> OpaqueValues;
+
+public:
+  bool isReferenceTypeOrStorageReference(Expr *e) {
+    return (e->getType()->hasReferenceSemantics() || visit(e));
+  }
+
+  bool visit(Expr *e) {
+    return super::visit(e->getSemanticsProvidingExpr());
+  }
+
+  bool visitExpr(Expr *e) {
+    return false;
+  }
+
+  bool visitDeclRefExpr(DeclRefExpr *e) {
+    return isa<VarDecl>(e->getDecl());
+  }
+
+  bool visitMemberRefExpr(MemberRefExpr *e) {
+    return isa<VarDecl>(e->getMember().getDecl()) &&
+           isReferenceTypeOrStorageReference(e->getBase());
+  }
+
+  bool visitSubscriptExpr(SubscriptExpr *e) {
+    return isReferenceTypeOrStorageReference(e->getBase());
+  }
+
+  bool visitKeyPathApplicationExpr(KeyPathApplicationExpr *e) {
+    return isReferenceTypeOrStorageReference(e->getBase());
+  }
+
+  bool visitTupleElementExpr(TupleElementExpr *e) {
+    return visit(e->getBase());
+  }
+
+  bool visitForceValueExpr(ForceValueExpr *e) {
+    return visit(e->getSubExpr());
+  }
+
+  bool visitBindOptionalExpr(BindOptionalExpr *e) {
+    return visit(e->getSubExpr());
+  }
+
+  bool visitDotSyntaxBaseIgnoredExpr(DotSyntaxBaseIgnoredExpr *e) {
+    return visit(e->getRHS());
+  }
+
+  bool visitOpenExistentialExpr(OpenExistentialExpr *e) {
+    OpaqueValues[e->getOpaqueValue()] = e->getExistentialValue();
+    return visit(e->getSubExpr());
+  }
+
+  bool visitOpaqueValueExpr(OpaqueValueExpr *e) {
+    auto it = OpaqueValues.find(e);
+    if (it != OpaqueValues.end()) {
+      return visit(it->second);
+    } else {
+      return true; // The binding acts as a sort of storage reference.
+    }
+  }
+};
+
+} // end anonymous namespace
+
+bool Expr::isStorageReference() const {
+  return StorageReferenceClassifier().visit(const_cast<Expr*>(this));
+}
+
 /// Propagate l-value use information to children.
 void Expr::propagateLValueAccessKind(AccessKind accessKind,
                                      llvm::function_ref<Type(Expr *)> getType,

@@ -527,6 +527,17 @@ public:
   /// extension thereof), return the underlying operator reference.
   DeclRefExpr *getMemberOperatorRef();
 
+  /// Return true if this expression is a storage reference expression:
+  ///   - a reference to a local or global variable
+  ///   - a reference to a subscript whose base is either of reference type
+  ///     or a storage reference
+  ///   - a reference to a property whose base is either of reference type
+  ///     or a storage reference
+  ///   - a reference to a tuple element whose base is a storage reference
+  ///   - a key path application whose base is a storage reference
+  ///   - a force of a storage reference
+  bool isStorageReference() const;
+
   /// This recursively walks the AST rooted at this expression.
   Expr *walk(ASTWalker &walker);
   Expr *walk(ASTWalker &&walker) { return walk(walker); }

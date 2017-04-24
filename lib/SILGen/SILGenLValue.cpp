@@ -1848,13 +1848,27 @@ static LValue emitLValueForNonMemberVarDecl(SILGenFunction &SGF,
   }
 
   case AccessStrategy::Storage: {
+    auto typeData = getPhysicalStorageTypeData(SGF.SGM, var, formalRValueType);
+
     // If it's a physical value (e.g. a local variable in memory), push its
     // address.
     auto address = SGF.emitLValueForDecl(loc, var, formalRValueType,
                                          accessKind, semantics);
+
+    // If it's not an address, this is a non-addressed r-value let.
+    if (!address) {
+      auto value = SGF.emitRValueForDecl(loc, var, formalRValueType, semantics,
+                                         SGFContext::AllowGuaranteedPlusZero);
+
+      lv.add<ValueComponent>(value, None, typeData, /*rvalue*/ true);
+
+      if (address.getType().is<ReferenceStorageType>())
+        lv.add<OwnershipComponent>(typeData);
+      return;
+    }
+
     assert(address.isLValue() &&
            "physical lvalue decl ref must evaluate to an address");
-    auto typeData = getPhysicalStorageTypeData(SGF.SGM, var, formalRValueType);
 
     Optional<SILAccessEnforcement> enforcement;
     if (!var->isLet()) {

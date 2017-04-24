@@ -1937,7 +1937,63 @@ static CanType claimNextParamClause(CanAnyFunctionType &type) {
   return result;
 }
 
-using InOutArgument = std::pair<LValue, SILLocation>;
+class InOutArgument {
+public:
+  enum KindTy {
+    /// This is a true inout argument.
+    InOut,
+
+    /// This is a borrowed direct argument.
+    BorrowDirect,
+
+    /// This is a borrowed indirect argument.
+    BorrowIndirect,
+  };
+
+private:
+  KindTy Kind;
+  LValue LV;
+  SILLocation Loc;
+
+public:
+  InOutArgument(KindTy kind, LValue &&lv, SILLocation loc)
+    : Kind(kind), LV(std::move(lv)), Loc(loc) {}
+
+  bool isInOut() const { return Kind == InOut; }
+  SILLocation getLocation() const { return Loc; }
+
+  ManagedValue emit(SILGenFunction &SGF) {
+    switch (Kind) {
+    case InOut:
+      return emitInOut(SGF);
+    case BorrowDirect:
+      return emitBorrowDirect(SGF);
+    case BorrowIndirect:
+      return emitBorrowIndirect(SGF);
+    }
+    llvm_unreachable("bad kind");
+  }
+
+private:
+  ManagedValue emitInOut(SILGenFunction &SGF) {
+    return emitAddress(SGF, AccessKind::ReadWrite);
+  }
+
+  ManagedValue emitBorrowIndirect(SILGenFunction &SGF) {
+    return emitAddress(SGF, AccessKind::Read);
+  }
+
+  ManagedValue emitBorrowDirect(SILGenFunction &SGF) {
+    ManagedValue address = emitAddress(SGF, AccessKind::Read);
+    return SGF.B.createLoadBorrow(Loc, address);
+  }
+
+  ManagedValue emitAddress(SILGenFunction &SGF, AccessKind accessKind) {
+    auto tsanKind =
+      (accessKind == AccessKind::Read ? TSanKind::None : TSanKind::InOutAccess);
+    return SGF.emitAddressOfLValue(Loc, std::move(LV), accessKind, tsanKind);
+  }
+};
 
 /// Begin all the formal accesses for a set of inout arguments.
 static void beginInOutFormalAccesses(SILGenFunction &SGF,
@@ -1957,13 +2013,12 @@ static void beginInOutFormalAccesses(SILGenFunction &SGF,
     for (ManagedValue &siteArg : siteArgs) {
       if (siteArg) continue;
 
-      LValue &inoutArg = inoutNext->first;
-      SILLocation loc = inoutNext->second;
-      ManagedValue address = SGF.emitAddressOfLValue(loc, std::move(inoutArg),
-                                                     AccessKind::ReadWrite,
-                                                     TSanKind::InoutAccess);
-      siteArg = address;
-      emittedInoutArgs.push_back({address.getValue(), loc});
+      auto value = inoutNext->emit(SGF);
+      siteArg = value;
+      if (inoutNext->isInOut()) {
+        emittedInoutArgs.push_back({value.getValue(),
+                                    inoutNext->getLocation()});
+      }
 
       if (++inoutNext == inoutArgs.end())
         goto done;
@@ -2267,6 +2322,7 @@ class ArgEmitter {
   ImportAsMemberStatus ForeignSelf;
   ClaimedParamsRef ParamInfos;
   SmallVectorImpl<ManagedValue> &Args;
+  bool IsSelfApply;
 
   /// Track any inout arguments that are emitted.  Each corresponds
   /// in order to a "hole" (a null value) in Args.
@@ -2280,11 +2336,13 @@ public:
              SmallVectorImpl<InOutArgument> &inoutArgs,
              const Optional<ForeignErrorConvention> &foreignError,
              ImportAsMemberStatus foreignSelf,
+             bool isSelfApply,
              Optional<ArgSpecialDestArray> specialDests = None)
     : SGF(SGF), Rep(Rep), ForeignError(foreignError),
       ForeignSelf(foreignSelf),
       ParamInfos(paramInfos),
-      Args(args), InOutArguments(inoutArgs), SpecialDests(specialDests) {
+      Args(args), IsSelfApply(isSelfApply), InOutArguments(inoutArgs),
+      SpecialDests(specialDests) {
     assert(!specialDests || specialDests->size() == paramInfos.size());
   }
 
@@ -2367,9 +2425,7 @@ private:
       Args.push_back(ManagedValue::forInContext());
       return;
     } else if (SGF.silConv.isSILIndirect(param)) {
-      auto value = emitIndirect(std::move(arg), loweredSubstArgType,
-                                origParamType, param);
-      Args.push_back(value);
+      emitIndirect(std::move(arg), loweredSubstArgType, origParamType, param);
       return;
     }
 
@@ -2458,31 +2514,36 @@ private:
 
   void emitShuffle(TupleShuffleExpr *shuffle, AbstractionPattern origType);
 
-  ManagedValue emitIndirect(ArgumentSource &&arg,
-                            SILType loweredSubstArgType,
-                            AbstractionPattern origParamType,
-                            SILParameterInfo param) {
+  void emitIndirect(ArgumentSource &&arg,
+                    SILType loweredSubstArgType,
+                    AbstractionPattern origParamType,
+                    SILParameterInfo param) {
     auto contexts = getRValueEmissionContexts(loweredSubstArgType, param);
+    ManagedValue result;
 
     // If no abstraction is required, try to honor the emission contexts.
     if (!contexts.RequiresReabstraction) {
       auto loc = arg.getLocation();
-      ManagedValue result =
-        std::move(arg).getAsSingleValue(SGF, contexts.ForEmission);
-
-      // If it's already in memory, great.
-      if (result.getType().isAddress()) {
-        return result;
-
-      // Otherwise, put it there.
+      if (IsSelfApply && arg.isExpr() && param.isIndirectInGuaranteed()) {
+        emitSelfApplyValue(std::move(arg).asKnownExpr(), /*direct*/ false,
+                           contexts.ForEmission);
+        return;
       } else {
-        return emitMaterializeIntoTemporary(SGF, loc, result);
+        result = std::move(arg).getAsSingleValue(SGF, contexts.ForEmission);
       }
-    }
+
+      // If it's not already in memory, put it there.
+      if (!result.getType().isAddress()) {
+        result = emitMaterializeIntoTemporary(SGF, loc, result);
+      }
 
     // Otherwise, simultaneously emit and reabstract.
-    return std::move(arg).materialize(SGF, origParamType,
-                                      SGF.getSILType(param));
+    } else {
+      result = std::move(arg).materialize(SGF, origParamType,
+                                          SGF.getSILType(param));
+    }
+
+    Args.push_back(result);
   }
 
   void emitIndirectInto(ArgumentSource &&arg,
@@ -2535,7 +2596,7 @@ private:
 
     // Leave an empty space in the ManagedValue sequence and
     // remember that we had an inout argument.
-    InOutArguments.push_back({std::move(lv), loc});
+    InOutArguments.emplace_back(InOutArgument::InOut, std::move(lv), loc);
     Args.push_back(ManagedValue());
     return;
   }
@@ -2556,6 +2617,10 @@ private:
             std::move(arg), loweredSubstArgType, origParamType, param);
         break;
       }
+    } else if (IsSelfApply && arg.isExpr() && param.isDirectGuaranteed()) {
+      emitSelfApplyValue(std::move(arg).asKnownExpr(), /*direct*/ true,
+                         contexts.ForEmission);
+      return;
     } else {
       value = std::move(arg).getAsSingleValue(SGF, contexts.ForEmission);
     }
@@ -2577,6 +2642,50 @@ private:
     }
 
     Args.push_back(value);
+  }
+
+  void emitSelfApplyValue(Expr *e, bool direct, SGFContext ctxt) {
+    assert(!e->getType()->isLValueType());
+    e = e->getSemanticsProvidingExpr();
+
+    // If 'self' has reference semantics, it's always semantically
+    // an r-value.
+    Expr *storageReference = nullptr;
+    if (e->getType()->hasReferenceSemantics()) {
+      storageReference = nullptr;
+
+    // Otherwise, if 'self' is loaded from an l-value, emit a borrow
+    // of that l-value.
+    } else if (auto load = dyn_cast<LoadExpr>(e)) {
+      storageReference = load->getSubExpr();
+
+    // Otherwise, if 'self' is a storage reference, emit a borrow
+    // of that storage reference.
+    } else if (e->isStorageReference()) {
+      storageReference = e;
+
+    // Otherwise, it's an r-value by nature.
+    } else {
+      storageReference = nullptr;
+    }
+
+    // If we don't have a storage reference to access, just emit the
+    // expression as an r-value.
+    if (!storageReference) {
+      ManagedValue value = SGF.emitRValueAsSingleValue(e, ctxt);
+      if (!direct && !value.getType().isAddress()) {
+        value = emitMaterializeIntoTemporary(SGF, e, value);
+      }
+      Args.push_back(value);
+      return;
+    }
+
+    // Otherwise, emit the storage reference as an l-value.
+    LValue lv = SGF.emitLValue(e, AccessKind::Read);
+    InOutArguments.emplace_back(direct ? InOutArgument::BorrowDirect
+                                       : InOutArgument::BorrowIndirect,
+                                std::move(lv), e);
+    Args.push_back(ManagedValue());
   }
   
   ManagedValue emitSubstToOrigArgument(ArgumentSource &&arg,
@@ -3253,6 +3362,7 @@ void TupleShuffleArgEmitter::emit(ArgEmitter &parent) {
     ArgEmitter(parent.SGF, parent.Rep, ClaimedParamsRef(innerParams), innerArgs,
                innerInOutArgs,
                /*foreign error*/ None, /*foreign self*/ ImportAsMemberStatus(),
+               parent.IsSelfApply,
                (innerSpecialDests ? ArgSpecialDestArray(*innerSpecialDests)
                                   : Optional<ArgSpecialDestArray>()))
         .emitTopLevel(ArgumentSource(inner), innerOrigParamType);
@@ -3530,11 +3640,13 @@ namespace {
   private:
     ArgumentSource ArgValue;
     bool Throws;
+    bool IsSelfApply = false;
 
   public:
     CallSite(ApplyExpr *apply)
       : Loc(apply), SubstResultType(apply->getType()->getCanonicalType()),
-        ArgValue(apply->getArg()), Throws(apply->throws()) {
+        ArgValue(apply->getArg()), Throws(apply->throws()),
+        IsSelfApply(isa<SelfApplyExpr>(apply)) {
     }
 
     CallSite(SILLocation loc, ArgumentSource &&value,
@@ -3571,7 +3683,7 @@ namespace {
                                          foreignError, foreignSelf);
 
       ArgEmitter emitter(SGF, lowering.Rep, params, args, inoutArgs,
-                         foreignError, foreignSelf);
+                         foreignError, foreignSelf, IsSelfApply);
       emitter.emitTopLevel(std::move(ArgValue), origParamType);
     }
 
