@@ -2951,7 +2951,8 @@ static SILFunction *getOrCreateKeyPathGetter(SILGenFunction &SGF,
   
   auto signature = SILFunctionType::get(genericSig,
     SILFunctionType::ExtInfo(SILFunctionType::Representation::Thin,
-                             /*pseudogeneric*/ false),
+                             /*pseudogeneric*/ false,
+                             /*noescape*/ false),
     ParameterConvention::Direct_Unowned,
     param, result, None, SGF.getASTContext());
   
@@ -3048,7 +3049,8 @@ SILFunction *getOrCreateKeyPathSetter(SILGenFunction &SGF,
   
   auto signature = SILFunctionType::get(genericSig,
     SILFunctionType::ExtInfo(SILFunctionType::Representation::Thin,
-                             /*pseudogeneric*/ false),
+                             /*pseudogeneric*/ false,
+                             /*noescape*/ false),
     ParameterConvention::Direct_Unowned,
     {propParam, baseParam}, {}, None, SGF.getASTContext());
   
