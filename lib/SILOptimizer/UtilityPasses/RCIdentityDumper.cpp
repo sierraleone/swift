@@ -50,8 +50,8 @@ class RCIdentityDumper : public SILFunctionTransform {
         Results.push_back({Arg, RCId->getRCIdentityRoot(Arg)});
       }
       for (auto &II : BB) {
-        if (II.hasValue()) {
-          SILValue V(&II);
+        for (auto &result : II.getResults()) {
+          SILValue V(&result);
           ValueToValueIDMap[V] = ValueCount++;
           Results.push_back({V, RCId->getRCIdentityRoot(V)});
         }

@@ -89,7 +89,7 @@ bool
 swift::isInstructionTriviallyDead(SILInstruction *I) {
   // At Onone, consider all uses, including the debug_info.
   // This way, debug_info is preserved at Onone.
-  if (!I->use_empty() &&
+  if (I->hasUsesOfAnyResult() &&
       I->getModule().getOptions().Optimization <= SILOptions::SILOptMode::None)
     return false;
 
@@ -234,29 +234,32 @@ void swift::recursivelyDeleteTriviallyDeadInstructions(SILInstruction *I,
 
 void swift::eraseUsesOfInstruction(SILInstruction *Inst,
                                    CallbackTy Callback) {
-  while (!Inst->use_empty()) {
-    auto UI = Inst->use_begin();
-    auto *User = UI->getUser();
-    assert(User && "User should never be NULL!");
+  for (auto &result : Inst->getResults()) {
+    while (!result.use_empty()) {
+      auto UI = result.use_begin();
+      auto *User = UI->getUser();
+      assert(User && "User should never be NULL!");
 
-    // If the instruction itself has any uses, recursively zap them so that
-    // nothing uses this instruction.
-    eraseUsesOfInstruction(User, Callback);
+      // If the instruction itself has any uses, recursively zap them so that
+      // nothing uses this instruction.
+      eraseUsesOfInstruction(User, Callback);
 
-    // Walk through the operand list and delete any random instructions that
-    // will become trivially dead when this instruction is removed.
+      // Walk through the operand list and delete any random instructions that
+      // will become trivially dead when this instruction is removed.
 
-    for (auto &Op : User->getAllOperands()) {
-      if (auto *OpI = dyn_cast<SILInstruction>(Op.get())) {
-        // Don't recursively delete the pointer we're getting in.
-        if (OpI != Inst) {
-          Op.drop();
-          recursivelyDeleteTriviallyDeadInstructions(OpI, false, Callback);
+      for (auto &Op : User->getAllOperands()) {
+        if (auto *OpI = Op->getDefiningInstruction()) {
+          // Don't recursively delete the instruction we're working on.
+          // FIXME: what if we're being recursively invoked?
+          if (OpI != Inst) {
+            Op.drop();
+            recursivelyDeleteTriviallyDeadInstructions(OpI, false, Callback);
+          }
         }
       }
+      Callback(User);
+      User->eraseFromParent();
     }
-    Callback(User);
-    User->eraseFromParent();
   }
 }
 
@@ -282,7 +285,7 @@ void swift::eraseUsesOfValue(SILValue V) {
   // Its not safe to do recursively delete here as some of the SILInstruction
   // maybe tracked by this set.
   for (auto I : Insts) {
-    I->replaceAllUsesWithUndef();
+    I->replaceAllUsesOfAllResultsWithUndef();
     I->eraseFromParent();
   }
 }
@@ -334,7 +337,7 @@ SILValue swift::isPartialApplyOfReabstractionThunk(PartialApplyInst *PAI) {
 void swift::replaceDeadApply(ApplySite Old, ValueBase *New) {
   auto *OldApply = Old.getInstruction();
   if (!isa<TryApplyInst>(OldApply))
-    OldApply->replaceAllUsesWith(New);
+    cast<SingleValueInstruction>(OldApply)->replaceAllUsesWith(New);
   recursivelyDeleteTriviallyDeadInstructions(OldApply, true);
 }
 
@@ -446,7 +449,7 @@ void swift::clearBlockBody(SILBasicBlock *BB) {
     auto *Inst = &BB->back();
 
     // Replace any still-remaining uses with undef values and erase.
-    Inst->replaceAllUsesWithUndef();
+    Inst->replaceAllUsesOfAllResultsWithUndef();
     Inst->eraseFromParent();
   }
 }
@@ -892,13 +895,13 @@ SILInstruction *swift::tryToConcatenateStrings(ApplyInst *AI, SILBuilder &B) {
 
 static bool useDoesNotKeepClosureAlive(const SILInstruction *I) {
   switch (I->getKind()) {
-  case ValueKind::StrongRetainInst:
-  case ValueKind::StrongReleaseInst:
-  case ValueKind::CopyValueInst:
-  case ValueKind::DestroyValueInst:
-  case ValueKind::RetainValueInst:
-  case ValueKind::ReleaseValueInst:
-  case ValueKind::DebugValueInst:
+  case SILInstructionKind::::StrongRetainInst:
+  case SILInstructionKind::::StrongReleaseInst:
+  case SILInstructionKind::::CopyValueInst:
+  case SILInstructionKind::::DestroyValueInst:
+  case SILInstructionKind::::RetainValueInst:
+  case SILInstructionKind::::ReleaseValueInst:
+  case SILInstructionKind::::DebugValueInst:
     return true;
   default:
     return false;
@@ -1080,7 +1083,7 @@ static bool releaseCapturedArgsOfDeadPartialApply(PartialApplyInst *PAI,
 }
 
 /// TODO: Generalize this to general objects.
-bool swift::tryDeleteDeadClosure(SILInstruction *Closure,
+bool swift::tryDeleteDeadClosure(SingleValueInstruction *Closure,
                                  InstModCallbacks Callbacks) {
   // We currently only handle locally identified values that do not escape. We
   // also assume that the partial apply does not capture any addresses.
@@ -1110,9 +1113,10 @@ bool swift::tryDeleteDeadClosure(SILInstruction *Closure,
 
   // Then delete all user instructions.
   for (auto *User : Tracker.getTrackedUsers()) {
-    assert(!User->hasValue() && "We expect only ARC operations without "
-                                "results. This is true b/c of "
-                                "isARCOperationRemovableIfObjectIsDead");
+    assert(User->getResults().empty()
+           && "We expect only ARC operations without "
+              "results. This is true b/c of "
+              "isARCOperationRemovableIfObjectIsDead");
     Callbacks.DeleteInst(User);
   }
 
@@ -1390,7 +1394,7 @@ optimizeBridgedObjCToSwiftCast(SILInstruction *Inst,
 
   SILBuilderWithScope Builder(Inst);
   SILValue SrcOp;
-  SILInstruction *NewI = nullptr;
+  SingleValueInstruction *NewI = nullptr;
 
   assert(Src->getType().isAddress() && "Source should have an address type");
   assert(Dest->getType().isAddress() && "Source should have an address type");
@@ -2908,7 +2912,7 @@ swift::analyzeStaticInitializer(SILValue V,
     } else {
       if (auto *bi = dyn_cast<BuiltinInst>(I)) {
         switch (bi->getBuiltinInfo().ID) {
-        case BuiltinValueKind::FPTrunc:
+        case BuiltinSILInstructionKind::::FPTrunc:
           if (auto *LI = dyn_cast<LiteralInst>(bi->getArguments()[0])) {
             I = LI;
             continue;
@@ -2919,9 +2923,9 @@ swift::analyzeStaticInitializer(SILValue V,
         }
       }
 
-      if (I->getKind() == ValueKind::IntegerLiteralInst
-          || I->getKind() == ValueKind::FloatLiteralInst
-          || I->getKind() == ValueKind::StringLiteralInst)
+      if (I->getKind() == SILInstructionKind::IntegerLiteralInst
+          || I->getKind() == SILInstructionKind::FloatLiteralInst
+          || I->getKind() == SILInstructionKind::StringLiteralInst)
         return true;
       return false;
     }
@@ -3035,11 +3039,11 @@ void swift::hoistAddressProjections(Operand &Op, SILInstruction *InsertBefore,
     }
     
     switch (V->getKind()) {
-      case ValueKind::StructElementAddrInst:
-      case ValueKind::TupleElementAddrInst:
-      case ValueKind::RefElementAddrInst:
-      case ValueKind::RefTailAddrInst:
-      case ValueKind::UncheckedTakeEnumDataAddrInst: {
+      case SILInstructionKind::StructElementAddrInst:
+      case SILInstructionKind::TupleElementAddrInst:
+      case SILInstructionKind::RefElementAddrInst:
+      case SILInstructionKind::RefTailAddrInst:
+      case SILInstructionKind::UncheckedTakeEnumDataAddrInst: {
         auto *Inst = cast<SILInstruction>(V);
         // We are done once the current projection dominates the insert point.
         if (DomTree->dominates(Inst->getParent(), InsertBefore->getParent()))

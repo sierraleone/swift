@@ -73,10 +73,8 @@ static void createRefCountOpForPayload(SILBuilder &Builder, SILInstruction *I,
 
   ++NumRefCountOpsSimplified;
 
-  auto *RCI = cast<RefCountingInst>(I);
-
   // If we have a retain value...
-  if (isa<RetainValueInst>(I)) {
+  if (auto RCI = dyn_cast<RetainValueInst>(I)) {
     // And our payload is refcounted, insert a strong_retain onto the
     // payload.
     if (UEDITy.isReferenceCounted(Mod)) {
@@ -93,6 +91,7 @@ static void createRefCountOpForPayload(SILBuilder &Builder, SILInstruction *I,
   // payload.
   assert(isa<ReleaseValueInst>(I) && "If I is not a retain value here, it must "
          "be a release value since enums do not have reference semantics.");
+  auto *RCI = cast<ReleaseValueInst>(I);
 
   // If our payload has reference semantics, insert the strong release.
   if (UEDITy.isReferenceCounted(Mod)) {

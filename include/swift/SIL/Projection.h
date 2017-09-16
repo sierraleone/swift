@@ -228,8 +228,8 @@ public:
   Projection() = delete;
 
   explicit Projection(SILValue V)
-      : Projection(dyn_cast<SILInstruction>(V)) {}
-  explicit Projection(SILInstruction *I);
+      : Projection(dyn_cast<SingleValueInstruction>(V)) {}
+  explicit Projection(SingleValueInstruction *I);
 
   Projection(ProjectionKind Kind, unsigned NewIndex)
       : Value(Kind, NewIndex) {}
@@ -255,7 +255,7 @@ public:
 
   /// Determine if I is a value projection instruction whose corresponding
   /// projection equals this projection.
-  bool matchesObjectProjection(SILInstruction *I) const {
+  bool matchesObjectProjection(SingleValueInstruction *I) const {
     Projection P(I);
     return P.isValid() && P == *this;
   }
@@ -264,17 +264,17 @@ public:
   /// type differences and this Projection is representable as a value
   /// projection, create the relevant value projection and return it. Otherwise,
   /// return nullptr.
-  NullablePtr<SILInstruction>
+  NullablePtr<SingleValueInstruction>
   createObjectProjection(SILBuilder &B, SILLocation Loc, SILValue Base) const;
 
   /// If Base's type matches this Projections type ignoring Address vs Object
   /// type differences and this projection is representable as an address
   /// projection, create the relevant address projection and return
   /// it. Otherwise, return nullptr.
-  NullablePtr<SILInstruction>
+  NullablePtr<SingleValueInstruction>
   createAddressProjection(SILBuilder &B, SILLocation Loc, SILValue Base) const;
 
-  NullablePtr<SILInstruction>
+  NullablePtr<SingleValueInstruction>
   createProjection(SILBuilder &B, SILLocation Loc, SILValue Base) const {
     if (Base->getType().isAddress()) {
       return createAddressProjection(B, Loc, Base);
@@ -465,7 +465,7 @@ public:
   /// This can be used with getFirstLevelProjections to project out/reform
   /// values. We do not need to use the original projections here since to build
   /// aggregate instructions the order is the only important thing.
-  static NullablePtr<SILInstruction>
+  static NullablePtr<SingleValueInstruction>
   createAggFromFirstLevelProjections(SILBuilder &B, SILLocation Loc,
                                      SILType BaseType,
                                      llvm::SmallVectorImpl<SILValue> &Values);
@@ -788,10 +788,10 @@ public:
   ProjectionTreeNode *getChildForProjection(ProjectionTree &Tree,
                                                const Projection &P);
 
-  NullablePtr<SILInstruction> createProjection(SILBuilder &B, SILLocation Loc,
-                                               SILValue Arg) const;
+  NullablePtr<SingleValueInstruction>
+  createProjection(SILBuilder &B, SILLocation Loc, SILValue Arg) const;
 
-  SILInstruction *
+  SingleValueInstruction *
   createAggregate(SILBuilder &B, SILLocation Loc,
                   ArrayRef<SILValue> Args) const;
 

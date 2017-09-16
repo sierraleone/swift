@@ -51,15 +51,16 @@ class ArraySemanticsCall {
 
 public:
   /// Match array semantic calls.
-  ArraySemanticsCall(ValueBase *V, StringRef SemanticStr,
+  ArraySemanticsCall(SILNode *node, StringRef SemanticStr,
                      bool MatchPartialName);
 
   /// Match any array semantics call.
-  ArraySemanticsCall(ValueBase *V) : ArraySemanticsCall(V, "array.", true) {}
+  ArraySemanticsCall(SILNode *node)
+      : ArraySemanticsCall(node, "array.", true) {}
 
   /// Match a specific array semantic call.
-  ArraySemanticsCall(ValueBase *V, StringRef SemanticStr)
-      : ArraySemanticsCall(V, SemanticStr, false) {}
+  ArraySemanticsCall(SILNode *node, StringRef SemanticStr)
+      : ArraySemanticsCall(node, SemanticStr, false) {}
 
   /// Can we hoist this call.
   bool canHoist(SILInstruction *To, DominanceInfo *DT) const;
@@ -155,6 +156,8 @@ public:
 
   /// Get the semantics call as an ApplyInst.
   operator ApplyInst *() const { return SemanticsCall; }
+
+  SILValue getCallResult() const { return SemanticsCall; }
 
   /// Is this a semantics call.
   operator bool() const { return SemanticsCall != nullptr; }

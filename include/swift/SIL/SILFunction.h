@@ -777,8 +777,8 @@ public:
   void printName(raw_ostream &OS) const;
 
   /// Assigns consecutive numbers to all SILValues in the function.
-  void numberValues(llvm::DenseMap<const ValueBase*,
-                    unsigned> &ValueToNumberMap) const;
+  void numberValues(llvm::DenseMap<const SILNode*, unsigned> &nodeToNumberMap)
+    const;
 
   ASTContext &getASTContext() const;
 

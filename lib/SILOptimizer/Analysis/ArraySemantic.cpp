@@ -112,10 +112,10 @@ bool swift::ArraySemanticsCall::isValidSignature() {
 }
 
 /// Match array semantic calls.
-swift::ArraySemanticsCall::ArraySemanticsCall(ValueBase *V,
+swift::ArraySemanticsCall::ArraySemanticsCall(SILNode *node,
                                               StringRef SemanticStr,
                                               bool MatchPartialName) {
-  if (auto *AI = dyn_cast<ApplyInst>(V))
+  if (auto *AI = dyn_cast<ApplyInst>(node))
     if (auto *Fn = AI->getReferencedFunction())
       if ((MatchPartialName &&
            Fn->hasSemanticsAttrThatStartsWith(SemanticStr)) ||
@@ -347,7 +347,7 @@ static SILValue copyArrayLoad(SILValue ArrayStructValue,
     InsertPt = Inst;
   }
 
-  return LI->clone(InsertBefore);
+  return cast<LoadInst>(LI->clone(InsertBefore));
 }
 
 static ApplyInst *hoistOrCopyCall(ApplyInst *AI, SILInstruction *InsertBefore,

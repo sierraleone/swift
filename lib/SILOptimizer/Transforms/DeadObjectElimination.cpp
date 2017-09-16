@@ -197,7 +197,7 @@ removeInstructions(ArrayRef<SILInstruction*> UsersToRemove) {
 static bool canZapInstruction(SILInstruction *Inst) {
   // It is ok to eliminate various retains/releases. We are either removing
   // everything or nothing.
-  if (isa<RefCountingInst>(Inst))
+  if (isa<RefCountingInst>(Inst) || isa<StrongPinInst>(Inst))
     return true;
 
   // If we see a store here, we have already checked that we are storing into
@@ -388,7 +388,9 @@ recursivelyCollectInteriorUses(ValueBase *DefInst,
     auto User = Op->getUser();
 
     // Lifetime endpoints that don't allow the address to escape.
-    if (isa<RefCountingInst>(User) || isa<DebugValueInst>(User)) {
+    if (isa<RefCountingInst>(User) ||
+        isa<StrongPinInst>(User) ||
+        isa<DebugValueInst>(User)) {
       AllUsers.insert(User);
       continue;
     }

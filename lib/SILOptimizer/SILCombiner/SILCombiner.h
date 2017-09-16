@@ -51,10 +51,8 @@ public:
 
   /// If the given ValueBase is a SILInstruction add it to the worklist.
   void addValue(ValueBase *V) {
-    auto *I = dyn_cast<SILInstruction>(V);
-    if (!I)
-      return;
-    add(I);
+    if (auto *I = V->getDefiningInstruction())
+      add(I);
   }
 
   /// Add the given list of instructions in reverse order to the worklist. This
@@ -152,7 +150,7 @@ public:
   // replaceable with another preexisting expression. Here we add all uses of I
   // to the worklist, replace all uses of I with the new value, then return I,
   // so that the combiner will know that I was modified.
-  SILInstruction *replaceInstUsesWith(SILInstruction &I, ValueBase *V);
+  SILInstruction *replaceInstUsesWith(SingleValueInstruction &I, ValueBase *V);
 
   // Some instructions can never be "trivially dead" due to side effects or
   // producing a void value. In those cases, since we cannot rely on

@@ -48,9 +48,11 @@ SILArgument *IVInfo::isInductionSequence(SCCType &SCC) {
       continue;
     }
 
+    // TODO: MultiValueInstruction
+
     auto *I = cast<SILInstruction>(SCC[i]);
     switch (I->getKind()) {
-    case ValueKind::BuiltinInst: {
+    case SILInstructionKind::BuiltinInst: {
       if (FoundBuiltin)
         return nullptr;
 
@@ -69,7 +71,7 @@ SILArgument *IVInfo::isInductionSequence(SCCType &SCC) {
       break;
     }
 
-    case ValueKind::TupleExtractInst: {
+    case SILInstructionKind::TupleExtractInst: {
       assert(inSCC(cast<TupleExtractInst>(I)->getOperand(), SCC) &&
              "TupleExtract operand not an induction var");
       break;
@@ -94,5 +96,5 @@ void IVInfo::visit(SCCType &SCC) {
     return;
 
   for (auto V : SCC)
-    InductionVariableMap[V] = IV;
+    InductionVariableMap[cast<SingleValueInstruction>(V)] = IV;
 }

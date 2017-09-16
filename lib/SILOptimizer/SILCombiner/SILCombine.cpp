@@ -266,7 +266,7 @@ SILInstruction *SILCombiner::insertNewInstBefore(SILInstruction *New,
 // replaceable with another preexisting expression. Here we add all uses of I
 // to the worklist, replace all uses of I with the new value, then return I,
 // so that the combiner will know that I was modified.
-SILInstruction *SILCombiner::replaceInstUsesWith(SILInstruction &I,
+SILInstruction *SILCombiner::replaceInstUsesWith(SingleValueInstruction &I,
                                                  ValueBase *V) {
   Worklist.addUsersToWorklist(&I);   // Add all modified instrs to worklist.
 

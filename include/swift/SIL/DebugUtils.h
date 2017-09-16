@@ -169,16 +169,26 @@ inline SILInstruction *getSingleNonDebugUser(SILValue V) {
 /// incremented.
 inline void eraseFromParentWithDebugInsts(SILInstruction *I,
                                           SILBasicBlock::iterator &InstIter) {
-  while (!I->use_empty()) {
-    auto *User = I->use_begin()->getUser();
-    assert(isDebugInst(User));
-    if (InstIter != SILBasicBlock::iterator() &&
-        InstIter != I->getParent()->end() &&
-        &*InstIter == User) {
-      InstIter++;
+  auto results = I->getResults();
+
+  bool foundAny;
+  do {
+    foundAny = false;
+    for (auto &result : results) {
+      while (!result.use_empty()) {
+        foundAny = true;
+        auto *User = result.use_begin()->getUser();
+        assert(isDebugInst(User));
+        if (InstIter != SILBasicBlock::iterator() &&
+            InstIter != I->getParent()->end() &&
+            &*InstIter == User) {
+          InstIter++;
+        }
+        User->eraseFromParent();
+      }
     }
-    User->eraseFromParent();
-  }
+  } while (foundAny);
+
   I->eraseFromParent();
 }
 

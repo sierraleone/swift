@@ -322,8 +322,7 @@ MemBehavior MemoryBehaviorVisitor::visitSetDeallocatingInst(SetDeallocatingInst 
 MemBehavior
 AliasAnalysis::computeMemoryBehavior(SILInstruction *Inst, SILValue V,
                                      RetainObserveKind InspectionMode) {
-  MemBehaviorKeyTy Key = toMemoryBehaviorKey(SILValue(Inst), V,
-                                             InspectionMode);
+  MemBehaviorKeyTy Key = toMemoryBehaviorKey(Inst, V, InspectionMode);
   // Check if we've already computed this result.
   auto It = MemoryBehaviorCache.find(Key);
   if (It != MemoryBehaviorCache.end()) {
@@ -336,7 +335,7 @@ AliasAnalysis::computeMemoryBehavior(SILInstruction *Inst, SILValue V,
     MemoryBehaviorValueBaseToIndex.clear();
 
     // Key is no longer valid as we cleared the MemoryBehaviorValueBaseToIndex.
-    Key = toMemoryBehaviorKey(SILValue(Inst), V, InspectionMode);
+    Key = toMemoryBehaviorKey(Inst, V, InspectionMode);
   }
 
   // Calculate the aliasing result and store it in the cache.
@@ -354,7 +353,8 @@ AliasAnalysis::computeMemoryBehaviorInner(SILInstruction *Inst, SILValue V,
   return MemoryBehaviorVisitor(this, SEA, EA, V, InspectionMode).visit(Inst);
 }
 
-MemBehaviorKeyTy AliasAnalysis::toMemoryBehaviorKey(SILValue V1, SILValue V2,
+MemBehaviorKeyTy AliasAnalysis::toMemoryBehaviorKey(SILInstruction *V1,
+                                                    SILValue V2,
                                                     RetainObserveKind M) {
   size_t idx1 = MemoryBehaviorValueBaseToIndex.getIndex(V1);
   assert(idx1 != std::numeric_limits<size_t>::max() &&

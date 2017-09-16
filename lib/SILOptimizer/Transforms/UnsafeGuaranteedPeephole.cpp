@@ -156,7 +156,7 @@ static bool removeGuaranteedRetainReleasePairs(SILFunction &F,
       //  %5 = tuple_extract %4 : $(Foo, Builtin.Int8), 0
       //  %6 = tuple_extract %4 : $(Foo, Builtin.Int8), 1
       SILInstruction *UnsafeGuaranteedValue;
-      SILInstruction *UnsafeGuaranteedToken;
+      SILValue UnsafeGuaranteedToken;
       std::tie(UnsafeGuaranteedValue, UnsafeGuaranteedToken) =
           getSingleUnsafeGuaranteedValueResult(UnsafeGuaranteedI);
 

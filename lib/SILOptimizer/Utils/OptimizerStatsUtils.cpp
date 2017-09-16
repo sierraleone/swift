@@ -364,7 +364,7 @@ struct InstCountVisitor : SILVisitor<InstCountVisitor> {
 
   void visitValueBase(ValueBase *V) {}
 
-#define INST(Id, Parent, TextualName, MemBehavior, ReleasingBehavior)          \
+#define INST(Id, Parent)                                                       \
   void visit##Id(Id *I) {                                                      \
     ++InstCount;                                                               \
     ++InstCounts[int(I->getKind())];                                           \
